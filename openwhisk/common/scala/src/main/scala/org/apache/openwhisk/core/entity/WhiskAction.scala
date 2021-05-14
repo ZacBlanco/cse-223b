@@ -82,6 +82,7 @@ abstract class WhiskActionLike(override val name: EntityName) extends WhiskEntit
   def exec: Exec
   def parameters: Parameters
   def limits: ActionLimits
+  def stateful: Boolean
 
   /** @return true iff action has appropriate annotation. */
   def hasFinalParamsAnnotation = {
@@ -103,7 +104,9 @@ abstract class WhiskActionLike(override val name: EntityName) extends WhiskEntit
       "limits" -> limits.toJson,
       "version" -> version.toJson,
       "publish" -> publish.toJson,
-      "annotations" -> annotations.toJson)
+      "annotations" -> annotations.toJson,
+      "stateful" -> stateful.toJson,
+      )
 }
 
 abstract class WhiskActionLikeMetaData(override val name: EntityName) extends WhiskActionLike(name) {
@@ -137,7 +140,9 @@ case class WhiskAction(namespace: EntityPath,
                        version: SemVer = SemVer(),
                        publish: Boolean = false,
                        annotations: Parameters = Parameters(),
-                       override val updated: Instant = WhiskEntity.currentMillis())
+                       override val updated: Instant = WhiskEntity.currentMillis(),
+                       stateful: Boolean = false,
+                       )
     extends WhiskActionLike(name) {
 
   require(exec != null, "exec undefined")
@@ -173,7 +178,7 @@ case class WhiskAction(namespace: EntityPath,
   def toExecutableWhiskAction: Option[ExecutableWhiskAction] = exec match {
     case codeExec: CodeExec[_] =>
       Some(
-        ExecutableWhiskAction(namespace, name, codeExec, parameters, limits, version, publish, annotations)
+        ExecutableWhiskAction(namespace, name, codeExec, parameters, limits, version, publish, annotations, stateful = stateful)
           .revision[ExecutableWhiskAction](rev))
     case _ => None
   }
@@ -205,7 +210,8 @@ case class WhiskActionMetaData(namespace: EntityPath,
                                publish: Boolean = false,
                                annotations: Parameters = Parameters(),
                                override val updated: Instant = WhiskEntity.currentMillis(),
-                               binding: Option[EntityPath] = None)
+                               binding: Option[EntityPath] = None,
+                               stateful: Boolean = false)
     extends WhiskActionLikeMetaData(name) {
 
   require(exec != null, "exec undefined")
@@ -282,7 +288,9 @@ case class ExecutableWhiskAction(namespace: EntityPath,
                                  version: SemVer = SemVer(),
                                  publish: Boolean = false,
                                  annotations: Parameters = Parameters(),
-                                 binding: Option[EntityPath] = None)
+                                 binding: Option[EntityPath] = None,
+                                 stateful: Boolean = false,
+                                 )
     extends WhiskActionLike(name) {
 
   require(exec != null, "exec undefined")
@@ -315,7 +323,7 @@ case class ExecutableWhiskAction(namespace: EntityPath,
   }
 
   def toWhiskAction =
-    WhiskAction(namespace, name, exec, parameters, limits, version, publish, annotations)
+    WhiskAction(namespace, name, exec, parameters, limits, version, publish, annotations, stateful = stateful)
       .revision[WhiskAction](rev)
 }
 
@@ -328,14 +336,15 @@ case class ExecutableWhiskActionMetaData(namespace: EntityPath,
                                          version: SemVer = SemVer(),
                                          publish: Boolean = false,
                                          annotations: Parameters = Parameters(),
-                                         binding: Option[EntityPath] = None)
+                                         binding: Option[EntityPath] = None,
+                                         override val stateful: Boolean = false)
     extends WhiskActionLikeMetaData(name) {
 
   require(exec != null, "exec undefined")
   require(limits != null, "limits undefined")
 
   def toWhiskAction =
-    WhiskActionMetaData(namespace, name, exec, parameters, limits, version, publish, annotations, updated)
+    WhiskActionMetaData(namespace, name, exec, parameters, limits, version, publish, annotations, updated, stateful = stateful)
       .revision[WhiskActionMetaData](rev)
 
   /**
@@ -365,7 +374,9 @@ object WhiskAction extends DocumentFactory[WhiskAction] with WhiskEntityQueries[
     "version",
     "publish",
     "annotations",
-    "updated")
+    "updated",
+    "stateful",
+    )
 
   // overridden to store attached code
   override def put[A >: WhiskAction](db: ArtifactStore[A], doc: WhiskAction, old: Option[WhiskAction])(
@@ -583,7 +594,9 @@ object WhiskActionMetaData
     "publish",
     "annotations",
     "updated",
-    "binding")
+    "binding",
+    "stateful",
+    )
 
   /**
    * Resolves an action name if it is contained in a package.
