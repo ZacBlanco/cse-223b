@@ -1,4 +1,4 @@
 
 
 build:
-	cd ../openwhisk && ./gradlew build
+	cd ../openwhisk && ./gradlew build -x test
