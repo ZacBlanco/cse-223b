@@ -57,10 +57,11 @@ case class WhiskActionPut(exec: Option[Exec] = None,
                           version: Option[SemVer] = None,
                           publish: Option[Boolean] = None,
                           annotations: Option[Parameters] = None,
-                          delAnnotations: Option[Array[String]] = None) {
+                          delAnnotations: Option[Array[String]] = None,
+                          stateful: Boolean = false) {
 
   protected[core] def replace(exec: Exec) = {
-    WhiskActionPut(Some(exec), parameters, limits, version, publish, annotations)
+    WhiskActionPut(Some(exec), parameters, limits, version, publish, annotations, stateful = stateful)
   }
 
   /**
@@ -72,7 +73,7 @@ case class WhiskActionPut(exec: Option[Exec] = None,
         val newExec = SequenceExec(components map { c =>
           FullyQualifiedEntityName(c.path.resolveNamespace(userNamespace), c.name)
         })
-        WhiskActionPut(Some(newExec), parameters, limits, version, publish, annotations)
+        WhiskActionPut(Some(newExec), parameters, limits, version, publish, annotations, stateful = stateful)
       case _ => this
     } getOrElse this
   }
@@ -250,7 +251,9 @@ case class WhiskActionMetaData(namespace: EntityPath,
           version,
           publish,
           annotations,
-          binding)
+          binding,
+          stateful = stateful,
+        )
           .revision[ExecutableWhiskActionMetaData](rev))
     case _ =>
       None
@@ -337,7 +340,7 @@ case class ExecutableWhiskActionMetaData(namespace: EntityPath,
                                          publish: Boolean = false,
                                          annotations: Parameters = Parameters(),
                                          binding: Option[EntityPath] = None,
-                                         override val stateful: Boolean = false)
+                                         stateful: Boolean = false)
     extends WhiskActionLikeMetaData(name) {
 
   require(exec != null, "exec undefined")
@@ -662,5 +665,5 @@ object ActionLimitsOption extends DefaultJsonProtocol {
 }
 
 object WhiskActionPut extends DefaultJsonProtocol {
-  implicit val serdes = jsonFormat7(WhiskActionPut.apply)
+  implicit val serdes = jsonFormat8(WhiskActionPut.apply)
 }
