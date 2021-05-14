@@ -10,7 +10,7 @@ jobs:
     # Name the Job
     name: Build openwhisk
     # Set the type of machine to run on
-    runs-on: [self-hosted]
+    runs-on: [self-hosted, linux]
 
     steps:
       # Checks out a copy of your repository on the ubuntu-latest machine
