@@ -51,6 +51,7 @@ class Wsk(host: String, port: Int, authKey: String)(implicit system: ActorSystem
     s"""{
       |    "namespace": "_",
       |    "name": "$name",
+      |    "stateful": false,
       |    "exec": {
       |        "kind": "nodejs:default",
       |        "code": ${quote(code)}

@@ -651,7 +651,7 @@ function save(web) {
   elem("run").disabled = true  // Suppress run while saving
   console.log("Saving editor contents")
   let contents = window.editor.getValue()
-    let arg = { code : contents, playgroundId: window.playgroundId, actionName: window.currentAction, runtime: window.language.kind }
+    let arg = { code : contents, playgroundId: window.playgroundId, actionName: window.currentAction, runtime: window.language.kind, stateful: false }
     if (web) {
       arg['web-export'] = true
     } else {
@@ -763,7 +763,7 @@ function runClicked() {
     let t0 = new Date().getTime()
     let inputStr = elem("input").value
     let params = JSON.parse(inputStr)
-    let arg = { code : contents, params: params, playgroundId: window.playgroundId, actionName: window.currentAction, runtime: window.language.kind }
+    let arg = { code : contents, params: params, playgroundId: window.playgroundId, actionName: window.currentAction, runtime: window.language.kind, stateful: false }
     return makeOpenWhiskRequest('playground-run.json', arg).then(result => {
     let elapsed = new Date().getTime() - t0
     let response = JSON.parse(result)
