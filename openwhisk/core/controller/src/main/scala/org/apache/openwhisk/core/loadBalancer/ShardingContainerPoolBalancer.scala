@@ -150,8 +150,8 @@ class ShardingContainerPoolBalancer(
   controllerInstance: ControllerInstanceId,
   feedFactory: FeedFactory,
   val invokerPoolFactory: InvokerPoolFactory,
-  implicit val messagingProvider: MessagingProvider = SpiLoader.get[MessagingProvider])(
-  implicit actorSystem: ActorSystem,
+  implicit val messagingProvider: MessagingProvider = SpiLoader.get[MessagingProvider])(implicit
+  actorSystem: ActorSystem,
   logging: Logging,
   materializer: ActorMaterializer)
     extends CommonLoadBalancer(config, feedFactory, controllerInstance) {
@@ -255,8 +255,8 @@ class ShardingContainerPoolBalancer(
   override def clusterSize: Int = schedulingState.clusterSize
 
   /** 1. Publish a message to the loadbalancer */
-  override def publish(action: ExecutableWhiskActionMetaData, msg: ActivationMessage)(
-    implicit transid: TransactionId): Future[Future[Either[ActivationId, WhiskActivation]]] = {
+  override def publish(action: ExecutableWhiskActionMetaData, msg: ActivationMessage)(implicit
+    transid: TransactionId): Future[Future[Either[ActivationId, WhiskActivation]]] = {
 
     val isBlackboxInvocation = action.exec.pull
     val actionType = if (!isBlackboxInvocation) "managed" else "blackbox"
@@ -272,6 +272,7 @@ class ShardingContainerPoolBalancer(
         action.fullyQualifiedName(true),
         invokersToUse,
         schedulingState.invokerSlots,
+        action.stateful.getOrElse(false),
         action.limits.memory.megabytes,
         homeInvoker,
         stepSize)
@@ -294,9 +295,11 @@ class ShardingContainerPoolBalancer(
       .map { invoker =>
         // MemoryLimit() and TimeLimit() return singletons - they should be fast enough to be used here
         val memoryLimit = action.limits.memory
-        val memoryLimitInfo = if (memoryLimit == MemoryLimit()) { "std" } else { "non-std" }
+        val memoryLimitInfo = if (memoryLimit == MemoryLimit()) { "std" }
+        else { "non-std" }
         val timeLimit = action.limits.timeout
-        val timeLimitInfo = if (timeLimit == TimeLimit()) { "std" } else { "non-std" }
+        val timeLimitInfo = if (timeLimit == TimeLimit()) { "std" }
+        else { "non-std" }
         logging.info(
           this,
           s"scheduled activation ${msg.activationId}, action '${msg.action.asString}' ($actionType), ns '${msg.user.namespace.name.asString}', mem limit ${memoryLimit.megabytes} MB (${memoryLimitInfo}), time limit ${timeLimit.duration.toMillis} ms (${timeLimitInfo}) to ${invoker}")
@@ -334,8 +337,8 @@ class ShardingContainerPoolBalancer(
 
 object ShardingContainerPoolBalancer extends LoadBalancerProvider {
 
-  override def instance(whiskConfig: WhiskConfig, instance: ControllerInstanceId)(
-    implicit actorSystem: ActorSystem,
+  override def instance(whiskConfig: WhiskConfig, instance: ControllerInstanceId)(implicit
+    actorSystem: ActorSystem,
     logging: Logging,
     materializer: ActorMaterializer): LoadBalancer = {
 
@@ -406,6 +409,7 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
     fqn: FullyQualifiedEntityName,
     invokers: IndexedSeq[InvokerHealth],
     dispatched: IndexedSeq[NestedSemaphore[FullyQualifiedEntityName]],
+    stateful: Boolean,
     slots: Int,
     index: Int,
     step: Int,
@@ -414,27 +418,45 @@ object ShardingContainerPoolBalancer extends LoadBalancerProvider {
 
     if (numInvokers > 0) {
       val invoker = invokers(index)
-      //test this invoker - if this action supports concurrency, use the scheduleConcurrent function
-      if (invoker.status.isUsable && dispatched(invoker.id.toInt).tryAcquireConcurrent(fqn, maxConcurrent, slots)) {
-        Some(invoker.id, false)
-      } else {
-        // If we've gone through all invokers
-        if (stepsDone == numInvokers + 1) {
-          val healthyInvokers = invokers.filter(_.status.isUsable)
-          if (healthyInvokers.nonEmpty) {
-            // Choose a healthy invoker randomly
-            val random = healthyInvokers(ThreadLocalRandom.current().nextInt(healthyInvokers.size)).id
-            dispatched(random.toInt).forceAcquireConcurrent(fqn, maxConcurrent, slots)
-            logging.warn(this, s"system is overloaded. Chose invoker${random.toInt} by random assignment.")
-            Some(random, true)
+
+      stateful match {
+        case false =>
+          //test this invoker - if this action supports concurrency, use the scheduleConcurrent function
+          if (invoker.status.isUsable && dispatched(invoker.id.toInt).tryAcquireConcurrent(fqn, maxConcurrent, slots)) {
+            Some(invoker.id, false)
           } else {
-            None
+            // If we've gone through all invokers
+            if (stepsDone == numInvokers + 1) {
+              val healthyInvokers = invokers.filter(_.status.isUsable)
+              if (healthyInvokers.nonEmpty) {
+                // Choose a healthy invoker randomly
+                val random = healthyInvokers(ThreadLocalRandom.current().nextInt(healthyInvokers.size)).id
+                dispatched(random.toInt).forceAcquireConcurrent(fqn, maxConcurrent, slots)
+                logging.warn(this, s"system is overloaded. Chose invoker${random.toInt} by random assignment.")
+                Some(random, true)
+              } else {
+                None
+              }
+            } else {
+              val newIndex = (index + step) % numInvokers
+              schedule(maxConcurrent, fqn, invokers, dispatched, stateful, slots, newIndex, step, stepsDone + 1)
+            }
           }
-        } else {
-          val newIndex = (index + step) % numInvokers
-          schedule(maxConcurrent, fqn, invokers, dispatched, slots, newIndex, step, stepsDone + 1)
-        }
+        case true =>
+          // basically, if we are receiving pings from it, schedule it to the hashed ID.
+          if (invoker.status == Healthy || invoker.status == Unhealthy || invoker.status == Unresponsive) {
+            dispatched(invoker.id.toInt).forceAcquireConcurrent(fqn, maxConcurrent, slots)
+            Some(invoker.id, false)
+          } else {
+            if (stepsDone >= numInvokers + 1) {
+              None
+            } else {
+              val newIndex = (index + step) % numInvokers
+              schedule(maxConcurrent, fqn, invokers, dispatched, stateful, slots, newIndex, step, stepsDone + 1)
+            }
+          }
       }
+
     } else {
       None
     }
@@ -603,10 +625,11 @@ case class ClusterConfig(useClusterBootstrap: Boolean)
  * @param timeoutFactor factor to influence the timeout period for forced active acks (time-limit.std * timeoutFactor + timeoutAddon)
  * @param timeoutAddon extra time to influence the timeout period for forced active acks (time-limit.std * timeoutFactor + timeoutAddon)
  */
-case class ShardingContainerPoolBalancerConfig(managedFraction: Double,
-                                               blackboxFraction: Double,
-                                               timeoutFactor: Int,
-                                               timeoutAddon: FiniteDuration)
+case class ShardingContainerPoolBalancerConfig(
+  managedFraction: Double,
+  blackboxFraction: Double,
+  timeoutFactor: Int,
+  timeoutAddon: FiniteDuration)
 
 /**
  * State kept for each activation slot until completion.
@@ -622,13 +645,14 @@ case class ShardingContainerPoolBalancerConfig(managedFraction: Double,
  * @param isBlackbox true if the invoked action is a blackbox action, otherwise false (managed action)
  * @param isBlocking true if the action is invoked in a blocking fashion, i.e. "somebody" waits for the result
  */
-case class ActivationEntry(id: ActivationId,
-                           namespaceId: UUID,
-                           invokerName: InvokerInstanceId,
-                           memoryLimit: ByteSize,
-                           timeLimit: FiniteDuration,
-                           maxConcurrent: Int,
-                           fullyQualifiedEntityName: FullyQualifiedEntityName,
-                           timeoutHandler: Cancellable,
-                           isBlackbox: Boolean,
-                           isBlocking: Boolean)
+case class ActivationEntry(
+  id: ActivationId,
+  namespaceId: UUID,
+  invokerName: InvokerInstanceId,
+  memoryLimit: ByteSize,
+  timeLimit: FiniteDuration,
+  maxConcurrent: Int,
+  fullyQualifiedEntityName: FullyQualifiedEntityName,
+  timeoutHandler: Cancellable,
+  isBlackbox: Boolean,
+  isBlocking: Boolean)
