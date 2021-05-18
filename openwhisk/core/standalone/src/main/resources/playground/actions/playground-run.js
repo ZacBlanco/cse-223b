@@ -45,7 +45,7 @@ function main(outerParam) {
     let wsk = openwhisk({ignore_certs: outerParam.__ignore_certs}) // ignores self-signed certs, necessary in some deployments
     let actionName = 'user' + playgroundId + '/' + action
     let annotations = {"web-export": webExport ? true : false }
-    var deployParams = {name: actionName, action: code, kind: runtime, annotations: annotations}
+    var deployParams = {name: actionName, action: code, kind: runtime, annotations: annotations, stateful: false}
     return wsk.actions.update(deployParams).then(uresult => {
         // Unless saveOnly, run the action once deployed.
         let t1 = new Date().getTime()

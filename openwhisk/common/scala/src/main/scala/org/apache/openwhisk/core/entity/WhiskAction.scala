@@ -58,7 +58,8 @@ case class WhiskActionPut(exec: Option[Exec] = None,
                           publish: Option[Boolean] = None,
                           annotations: Option[Parameters] = None,
                           delAnnotations: Option[Array[String]] = None,
-                          stateful: Boolean = false) {
+                          stateful: Option[Boolean] = Some(false),
+                          ) {
 
   protected[core] def replace(exec: Exec) = {
     WhiskActionPut(Some(exec), parameters, limits, version, publish, annotations, stateful = stateful)
@@ -83,7 +84,7 @@ abstract class WhiskActionLike(override val name: EntityName) extends WhiskEntit
   def exec: Exec
   def parameters: Parameters
   def limits: ActionLimits
-  def stateful: Boolean
+  def stateful: Option[Boolean]
 
   /** @return true iff action has appropriate annotation. */
   def hasFinalParamsAnnotation = {
@@ -142,7 +143,7 @@ case class WhiskAction(namespace: EntityPath,
                        publish: Boolean = false,
                        annotations: Parameters = Parameters(),
                        override val updated: Instant = WhiskEntity.currentMillis(),
-                       stateful: Boolean = false,
+                       stateful: Option[Boolean] = Some(false),
                        )
     extends WhiskActionLike(name) {
 
@@ -212,7 +213,8 @@ case class WhiskActionMetaData(namespace: EntityPath,
                                annotations: Parameters = Parameters(),
                                override val updated: Instant = WhiskEntity.currentMillis(),
                                binding: Option[EntityPath] = None,
-                               stateful: Boolean = false)
+                               stateful: Option[Boolean] = Some(false),
+                               )
     extends WhiskActionLikeMetaData(name) {
 
   require(exec != null, "exec undefined")
@@ -292,7 +294,7 @@ case class ExecutableWhiskAction(namespace: EntityPath,
                                  publish: Boolean = false,
                                  annotations: Parameters = Parameters(),
                                  binding: Option[EntityPath] = None,
-                                 stateful: Boolean = false,
+                                 stateful: Option[Boolean] = Some(false),
                                  )
     extends WhiskActionLike(name) {
 
@@ -340,7 +342,8 @@ case class ExecutableWhiskActionMetaData(namespace: EntityPath,
                                          publish: Boolean = false,
                                          annotations: Parameters = Parameters(),
                                          binding: Option[EntityPath] = None,
-                                         stateful: Boolean = false)
+                                         stateful: Option[Boolean] = Some(false),
+                                         )
     extends WhiskActionLikeMetaData(name) {
 
   require(exec != null, "exec undefined")
