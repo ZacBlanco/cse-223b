@@ -14,7 +14,7 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 #
-IMG=action-golang-v1.15
+IMG=action-golang-v1.15-actor
 
 build:
 	../gradlew distDocker

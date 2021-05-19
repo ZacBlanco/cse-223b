@@ -51,8 +51,9 @@ func main() {
 	}
 
 	// assign the main function
-	type Action func(event map[string]interface{}) map[string]interface{}
+	type Action func(event map[string]interface{}, state *interface{}) map[string]interface{}
 	var action Action
+	var state interface{}
 	action = Main
 
 	// input
@@ -105,7 +106,7 @@ func main() {
 			payload = value
 		}
 		// process the request
-		result := action(payload)
+		result := action(payload, &state)
 		// encode the answer
 		output, err := json.Marshal(&result)
 		if err != nil {
