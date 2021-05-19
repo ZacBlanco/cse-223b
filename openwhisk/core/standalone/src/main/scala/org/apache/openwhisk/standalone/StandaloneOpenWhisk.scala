@@ -195,7 +195,37 @@ object StandaloneOpenWhisk extends SLF4JLogging {
      |          }
      |        ]
      |      }
-     |    ]
+     |    ],
+     |        "go": [
+     |            {
+     |                "kind": "go:1.15",
+     |                "default": true,
+     |                "deprecated": false,
+     |                "attached": {
+     |                    "attachmentName": "codefile",
+     |                    "attachmentType": "text/plain"
+     |                },
+     |                "image": {
+     |                    "prefix": "openwhisk",
+     |                    "name": "action-golang-v1.15",
+     |                    "tag": "nightly"
+     |                }
+     |            },
+     |            {
+     |                "kind": "go:1.15-actor",
+     |                "default": false,
+     |                "deprecated": false,
+     |                "attached": {
+     |                    "attachmentName": "codefile",
+     |                    "attachmentType": "text/plain"
+     |                },
+     |                "image": {
+     |                    "prefix": "whisk",
+     |                    "name": "action-golang-v1.15-actor",
+     |                    "tag": "latest"
+     |                }
+     |            }
+     |        ]
      |  }
      |}
      |""".stripMargin
