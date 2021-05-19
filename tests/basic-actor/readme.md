@@ -34,11 +34,11 @@ destroyed (via timeout, or _eventually_ checkpointed)
 To deploy and test:
 
 - download and install the openwhisk CLI `wsk` and put it on your `$PATH`
-- start the `StandaloneOpenWhisk` process (via vscode or `./gradlew :core:standalone:bootRun)
+- start the `StandaloneOpenWhisk` process (via vscode or `./gradlew :core:standalone:bootRun`)
 
 Run the following commands:
 
-```shell
+```console
 $ wsk -i --apihost http:;172.17.0.1:3233 action create actor-test actor.go --kind go:1.15-actor
 $ wsk -i --apihost http://172.17.0.1:3233 action invoke actor-test -r
 {
