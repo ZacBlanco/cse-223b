@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-ext.dockerImageName = 'action-golang-v1.15'
+ext.dockerImageName = 'action-golang-v1.15-actor'
 apply from: '../gradle/docker.gradle'
 
 distDocker.dependsOn 'staticBuildProxy'
