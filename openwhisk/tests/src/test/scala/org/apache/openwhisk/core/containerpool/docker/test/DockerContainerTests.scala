@@ -806,6 +806,7 @@ class DockerContainerTests
     var pauses = mutable.Buffer.empty[ContainerId]
     var unpauses = mutable.Buffer.empty[ContainerId]
     var rms = mutable.Buffer.empty[ContainerId]
+    var checkpoints = mutable.Buffer.empty[ContainerId]
     var pulls = mutable.Buffer.empty[String]
     var rawContainerLogsInvocations = mutable.Buffer.empty[(ContainerId, Long, Option[FiniteDuration])]
 
@@ -835,6 +836,11 @@ class DockerContainerTests
 
     def rm(id: ContainerId)(implicit transid: TransactionId): Future[Unit] = {
       rms += id
+      Future.successful(())
+    }
+
+    def checkpoint(id: ContainerId)(implicit transid: TransactionId): Future[Unit] = {
+      checkpoints += id
       Future.successful(())
     }
 

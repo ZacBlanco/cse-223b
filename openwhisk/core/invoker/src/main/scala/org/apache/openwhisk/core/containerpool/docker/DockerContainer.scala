@@ -190,7 +190,9 @@ class DockerContainer(protected val id: ContainerId,
     super.destroy()
     docker.rm(id)
   }
-
+  override def checkpoint()(implicit transid: TransactionId): Future[Unit] = {
+    docker.checkpoint(id)
+  }
   /**
    * Was the container killed due to memory exhaustion?
    *

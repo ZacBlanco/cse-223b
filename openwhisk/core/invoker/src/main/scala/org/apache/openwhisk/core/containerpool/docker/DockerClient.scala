@@ -182,6 +182,9 @@ class DockerClient(dockerHost: Option[String] = None,
     runCmd(cmd, config.timeouts.ps).map(_.linesIterator.toSeq.map(ContainerId.apply))
   }
 
+  def checkpoint(id: ContainerId)(implicit transid: TransactionId): Future[Unit] =
+    runCmd(Seq("checkpoint", id.asString), config.timeouts.unpause).map(_ => ())
+
   /**
    * Stores pulls that are currently being executed and collapses multiple
    * pulls into just one. After a pull is finished, the cached future is removed
@@ -294,6 +297,14 @@ trait DockerApi {
    * @return a Future containing whether the container was killed or not
    */
   def isOomKilled(id: ContainerId)(implicit transid: TransactionId): Future[Boolean]
+
+  /**
+   * Checkpoints the container with the given id.
+   *
+   * @param id the id of the container to remove
+   * @return a Future completing according to the command's exit-code
+   */
+  def checkpoint(id: ContainerId)(implicit transid: TransactionId): Future[Unit]
 }
 
 /** Indicates any error while starting a container that leaves a broken container behind that needs to be removed */

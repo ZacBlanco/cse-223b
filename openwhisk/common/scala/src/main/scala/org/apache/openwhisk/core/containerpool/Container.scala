@@ -109,6 +109,11 @@ trait Container {
     closeConnections(httpConnection)
   }
 
+  /** Checkpoint a container. Default is to do nothing */
+  def checkpoint()(implicit transid: TransactionId): Future[Unit] = {
+    Future.successful({})
+  }
+
   /** Initializes code in the container. */
   def initialize(initializer: JsObject,
                  timeout: FiniteDuration,
