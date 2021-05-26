@@ -1,27 +1,4 @@
 
-build:
-	wsk -i --apihost http://localhost:3233 action update web-crawler-main main.go --kind go:1.15-actor --main Main
-	wsk -i --apihost http://localhost:3233 action update web-crawler-c0 main.go --kind go:1.15-actor --main MainChild1
-	wsk -i --apihost http://localhost:3233 action update web-crawler-c1 main.go --kind go:1.15-actor --main MainChild2
-
-buildc:
-	wsk -i --apihost http://localhost:3233 action update web-crawler-main exec.zip --kind go:1.15-actor --main Main
-	wsk -i --apihost http://localhost:3233 action update web-crawler-c0 exec.zip --kind go:1.15-actor --main MainChild1
-	wsk -i --apihost http://localhost:3233 action update web-crawler-c1 exec.zip --kind go:1.15-actor --main MainChild2
-
-# https://www.ibm.com/cloud/blog/running-existing-app-ibm-cloud-functions
-# broken
-mybuild:
-	env GOOS=linux GOARCH=amd64 go build -o exec
-	zip exec.zip exec
-	wsk -i --apihost http://localhost:3233 action update web-crawler-main exec.zip --kind go:1.15-actor --main Main
-
-run:
-	wsk -i --apihost http://localhost:3233 action invoke web-crawler-main -r
-
-runv:
-	wsk -i --apihost http://localhost:3233 action invoke web-crawler-main -r -v -d
-
 OW_USER?=whisk
 OW_RUNTIME?=$(OW_USER)/action-golang-v1.15-actor:latest
 OW_COMPILER?=$(OW_USER)/action-golang-v1.15-actor:latest
@@ -32,6 +9,31 @@ SRCS=main.go go.mod go.sum
 NAME=module-main
 BINZIP=$(MAIN)-bin.zip
 SRCZIP=$(MAIN)-src.zip
+
+build: $(SRCZIP)
+	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-main $(SRCZIP) --kind go:1.15-actor --main Main
+	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c0 main.go --kind go:1.15-actor --main MainChild1
+	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c1 main.go --kind go:1.15-actor --main MainChild2
+
+buildc:
+	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-main exec.zip --kind go:1.15-actor --main Main
+	# wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c0 exec.zip --kind go:1.15-actor --main MainChild1
+	# wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c1 exec.zip --kind go:1.15-actor --main MainChild2
+
+# https://www.ibm.com/cloud/blog/running-existing-app-ibm-cloud-functions
+# broken
+mybuild:
+	env GOOS=linux GOARCH=amd64 go build -o exec
+	zip exec.zip exec
+	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-main exec.zip --kind go:1.15-actor --main Main
+
+run:
+	wsk -i --apihost http://172.17.0.1:3233 action invoke web-crawler-main -b
+
+runv:
+	wsk -i --apihost http://172.17.0.1:3233 action invoke web-crawler-main -r -v -d
+
+
 
 deploy: package.done $(BINZIP)
 	$(WSK) action update $(PACKAGE)/$(NAME) $(BINZIP) --main $(MAIN) --docker $(OW_RUNTIME)

@@ -1,13 +1,13 @@
 package main
 
 import (
-	//"fmt"
+	"fmt"
 	"hash"
 	"hash/fnv"
-
-	//"net/http"
+	"log"
+	"net/http"
 	"net/url"
-	//"github.com/apache/openwhisk-client-go/whisk"
+	"github.com/apache/openwhisk-client-go/whisk"
 )
 
 const (
@@ -25,10 +25,12 @@ func Main(args map[string]interface{}, state *interface{}) map[string]interface{
 	for i := 0; i < NUM_ACTORS; i++ {
 		go StartIthChildWebCrawlerAndGetState(i, args, actorStates)
 	}
+	log.Println("started goroutines")
 
 	for i := 0; i < NUM_ACTORS; i++ {
 		unorderedChildActorStates = append(unorderedChildActorStates, <-actorStates)
 	}
+	log.Println("got states")
 
 	return map[string]interface{}{
 		"actorStates": unorderedChildActorStates,
@@ -145,31 +147,34 @@ func StartIthChildWebCrawlerAndGetState(
 	args map[string]interface{},
 	actorStates chan WebCrawlerState,
 ) {
-	//// https://pkg.go.dev/github.com/apache/openwhisk-client-go@v0.0.0-20210313152306-ea317ea2794c/whisk#section-documentation
-	//config := &whisk.Config{
-	//	AuthToken: "23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP",
-	//	Host:      "http://localhost:3233",
-	//	Insecure:  true,
-	//}
+	config := &whisk.Config{
+		AuthToken: "23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP",
+		Host:      "http://172.17.0.1:3233",
+		Insecure:  true,
+	}
 
-	//client, err := whisk.NewClient(http.DefaultClient, config)
-	//if err != nil {
-	//	actorStates <- WebCrawlerState{}
-	//	return
-	//}
+	client, err := whisk.NewClient(http.DefaultClient, config)
+	if err != nil {
+		actorStates <- WebCrawlerState{}
+		log.Println("failed to invoke action", err)
+		fmt.Println("Failed to create new whisk client: ", err)
+		return
+	}
 
-	//res, _, err := client.Actions.Invoke(fmt.Sprintf("web-crawler-c%v", id), args, true, true)
+	res, _, err := client.Actions.Invoke(fmt.Sprintf("web-crawler-c%v", id), args, true, true)
 
-	//if err != nil {
-	//	actorStates <- WebCrawlerState{}
-	//	return
-	//}
+	if err != nil {
+		actorStates <- WebCrawlerState{}
+		log.Println("failed to invoke action", err)
+		fmt.Println("Failed to invoke action: ", err)
+		return
+	}
 
-	//if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
-	//	actorStates <- state
-	//} else {
-	//	actorStates <- WebCrawlerState{}
-	//}
+	if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
+		actorStates <- state
+	} else {
+		actorStates <- WebCrawlerState{}
+	}
 	actorStates <- WebCrawlerState{}
 }
 
