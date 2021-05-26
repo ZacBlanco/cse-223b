@@ -1,13 +1,13 @@
 package main
 
 import (
-	"fmt"
+	//"fmt"
 	"hash"
 	"hash/fnv"
-	"net/http"
-	"net/url"
 
-	"github.com/apache/openwhisk-client-go/whisk"
+	//"net/http"
+	"net/url"
+	//"github.com/apache/openwhisk-client-go/whisk"
 )
 
 const (
@@ -145,32 +145,32 @@ func StartIthChildWebCrawlerAndGetState(
 	args map[string]interface{},
 	actorStates chan WebCrawlerState,
 ) {
-	// https://pkg.go.dev/github.com/apache/openwhisk-client-go@v0.0.0-20210313152306-ea317ea2794c/whisk#section-documentation
-	config := &whisk.Config{
-		AuthToken: "23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP",
-		Host:      "http://localhost:3233",
-		Insecure:  true,
-	}
+	//// https://pkg.go.dev/github.com/apache/openwhisk-client-go@v0.0.0-20210313152306-ea317ea2794c/whisk#section-documentation
+	//config := &whisk.Config{
+	//	AuthToken: "23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP",
+	//	Host:      "http://localhost:3233",
+	//	Insecure:  true,
+	//}
 
-	client, err := whisk.NewClient(http.DefaultClient, config)
-	if err != nil {
-		actorStates <- WebCrawlerState{}
-		return
-	}
+	//client, err := whisk.NewClient(http.DefaultClient, config)
+	//if err != nil {
+	//	actorStates <- WebCrawlerState{}
+	//	return
+	//}
 
-	res, _, err := client.Actions.Invoke(fmt.Sprintf("web-crawler-c%v", id), args, true, true)
+	//res, _, err := client.Actions.Invoke(fmt.Sprintf("web-crawler-c%v", id), args, true, true)
 
-	if err != nil {
-		actorStates <- WebCrawlerState{}
-		return
-	}
+	//if err != nil {
+	//	actorStates <- WebCrawlerState{}
+	//	return
+	//}
 
-	if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
-		actorStates <- state
-	} else {
-		actorStates <- WebCrawlerState{}
-	}
-	//actorStates <- WebCrawlerState{}
+	//if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
+	//	actorStates <- state
+	//} else {
+	//	actorStates <- WebCrawlerState{}
+	//}
+	actorStates <- WebCrawlerState{}
 }
 
 func GetSeedsFromArgs(args map[string]interface{}) []string {
