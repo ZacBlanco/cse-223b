@@ -4,56 +4,20 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
-	"log"
 	"net/http"
 	"net/url"
-	"github.com/apache/openwhisk-client-go/whisk"
+
+	"github.com/PuerkitoBio/goquery"
 )
 
 const (
-	SEEDS_KEY  = "seeds"
-	STATE_KEY  = "state"
-	NUM_ACTORS = 2
+	SEEDS_KEY              = "seeds"
+	STATE_KEY              = "state"
+	MAX_CHANNEL_SIZE       = 100
+	NUM_ACTORS             = 1
+	MAX_NUM_PAGES_TO_VISIT = 4
+	WSK_HOST               = "http://172.17.0.1:3233"
 )
-
-// Parent Actor
-func Main(args map[string]interface{}, state *interface{}) map[string]interface{} {
-	var unorderedChildActorStates []WebCrawlerState
-	actorStates := make(chan WebCrawlerState)
-
-	// Start each child actor
-	for i := 0; i < NUM_ACTORS; i++ {
-		go StartIthChildWebCrawlerAndGetState(i, args, actorStates)
-	}
-	log.Println("started goroutines")
-
-	for i := 0; i < NUM_ACTORS; i++ {
-		unorderedChildActorStates = append(unorderedChildActorStates, <-actorStates)
-	}
-	log.Println("got states")
-
-	return map[string]interface{}{
-		"actorStates": unorderedChildActorStates,
-	}
-}
-
-// Child Actor: crawls web pages
-func MainChild1(args map[string]interface{}, state *interface{}) map[string]interface{} {
-	const actorId = 0
-	seeds := GetSeedsFromArgs(args)
-	actor := NewActorWithId(actorId)
-	actor.UseLatestState(state)
-	return actor.StartWebCrawler(seeds)
-}
-
-// Child Actor: crawls web pages
-func MainChild2(args map[string]interface{}, state *interface{}) map[string]interface{} {
-	const actorId = 1
-	seeds := GetSeedsFromArgs(args)
-	actor := NewActorWithId(actorId)
-	actor.UseLatestState(state)
-	return actor.StartWebCrawler(seeds)
-}
 
 type Actor struct {
 	Id        int
@@ -63,28 +27,104 @@ type Actor struct {
 }
 
 type WebCrawlerState struct {
-	Seen    map[string]bool // seeds already visited
-	StateId int             // monotonic increasing counter. Larger StateIds are more recent.
+	Id   int
+	Seen map[string]bool // seeds already visited
 }
 
 type Fetcher interface {
 	// Fetch returns the body of URL and
 	// a slice of URLs found on that page.
-	Fetch(url string) (body string, urls []string, err error)
+	Fetch(url string) (urls []string, err error)
 }
 
-func (actor *Actor) UseLatestState(state *interface{}) {
-	if newState, ok := (*state).(WebCrawlerState); ok {
-		if newState.StateId > actor.State.StateId {
-			actor.State = newState
-		}
+type Interface interface{}
+
+func Main(args map[string]interface{}, state *interface{}) map[string]interface{} {
+	fmt.Println("Into main: ", args, *state)
+
+	var unorderedChildActorStates []WebCrawlerState
+	states := ParseActorStates(state)
+	actorStates := make(chan WebCrawlerState)
+
+	fns := []func(map[string]interface{}, *interface{}) map[string]interface{}{
+		Mainchild1}
+
+	// Start web crawl jobs
+	for i := 0; i < len(fns); i++ {
+		go func(actorId int) {
+			var res map[string]interface{}
+			var tempState interface{}
+			tempState, e := findState(states, actorId)
+			if e != nil {
+				fmt.Println("Did not find a previous state for", actorId)
+				res = fns[actorId](args, nil)
+			} else {
+				fmt.Println("Found a previous state for", actorId)
+				res = fns[actorId](args, &tempState)
+			}
+			if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
+				actorStates <- state
+			} else {
+				actorStates <- WebCrawlerState{}
+			}
+		}(i)
+	}
+
+	// wait on jobs to complete
+	for i := 0; i < len(fns); i++ {
+		unorderedChildActorStates = append(unorderedChildActorStates, <-actorStates)
+	}
+
+	// Save the state
+	*state = unorderedChildActorStates
+
+	return map[string]interface{}{
+		"actorStates": unorderedChildActorStates,
 	}
 }
 
-func (actor *Actor) StartWebCrawler(seeds []string) map[string]interface{} {
+func findState(states []WebCrawlerState, id int) (WebCrawlerState, error) {
+	for _, state := range states {
+		if state.Id == id {
+			return state, nil
+		}
+	}
+	return WebCrawlerState{}, fmt.Errorf("state %d not found", id)
+}
+
+//func Mainchild1(args map[string]interface{}, state *interface{}) map[string]interface{} {
+func Mainchild1(args map[string]interface{}, state *interface{}) map[string]interface{} {
+	const actorId = 0
+	seeds := GetSeedsFromArgs(args)
+	actor := NewActorWithId(actorId)
+	actor.UseLatestState(state)
+	return actor.StartWebCrawlerAndReturnWebCrawlerState(seeds)
+}
+
+func ParseActorStates(state *interface{}) []WebCrawlerState {
+	if state == nil {
+		return make([]WebCrawlerState, 0)
+	}
+	if states, ok := (*state).([]WebCrawlerState); ok {
+		// order the states by ID
+		return states
+	}
+	return make([]WebCrawlerState, 0)
+}
+
+func (actor *Actor) UseLatestState(state *interface{}) {
+	if state == nil {
+		return
+	}
+	if newState, ok := (*state).(WebCrawlerState); ok {
+		actor.State = newState
+	}
+}
+
+func (actor *Actor) StartWebCrawlerAndReturnWebCrawlerState(seeds []string) map[string]interface{} {
 	actor.crawl(seeds)
 	return map[string]interface{}{
-		"state": actor.State,
+		STATE_KEY: actor.State,
 	}
 }
 
@@ -92,31 +132,46 @@ func (actor *Actor) StartWebCrawler(seeds []string) map[string]interface{} {
 
 func (actor *Actor) crawl(seeds []string) {
 	// url references
-	urlRefsToVisit := make(chan string)
+	urlRefsToVisit := make(chan string, MAX_CHANNEL_SIZE)
 
+	fmt.Println("Populating seeds:", actor.Id, seeds)
 	actor.populateUrlRefsToVisit(urlRefsToVisit, seeds)
 
+	fmt.Println("Start crawling", actor.Id)
 	done := false
+	numVisitedPages := 0
 	for !done {
 		select {
 		case urlRef := <-urlRefsToVisit:
+			if !actor.State.Seen[urlRef] {
+				numVisitedPages += 1
+			}
 			actor.fetchAndUpdate(urlRef, urlRefsToVisit)
+			if numVisitedPages >= MAX_NUM_PAGES_TO_VISIT {
+				done = true
+			}
 		default:
+			fmt.Println("No more urls to visit")
 			done = true // no more urls to visit
 		}
 	}
+	fmt.Println("Done", actor.Id)
 }
 
 func (actor *Actor) populateUrlRefsToVisit(urlRefsToVisit chan string, urlRefs []string) {
 	for _, urlRef := range urlRefs {
 		if actor.shouldVisitUrl(urlRef) {
-			urlRefsToVisit <- urlRef
+			select {
+			case urlRefsToVisit <- urlRef: // best effor insert into channel.
+			default: // channel is full. just skip this entry
+			}
 		}
 	}
 }
 
 func (actor *Actor) shouldVisitUrl(urlRef string) bool {
 	if actor.State.Seen[urlRef] {
+		fmt.Println("Already seen URL:", urlRef)
 		return false
 	}
 
@@ -134,7 +189,11 @@ func (actor *Actor) hashTheNameAndReturnOwnerId(name string) int {
 }
 
 func (actor *Actor) fetchAndUpdate(urlRef string, urlRefsToVisit chan string) {
-	if _, urlRefs, e := actor.MyFetcher.Fetch(urlRef); e == nil {
+	fmt.Println("fetchAndUpdate:", actor.State.Id, urlRef)
+	if actor.MyFetcher == nil || actor.State.Seen[urlRef] {
+		return
+	}
+	if urlRefs, e := actor.MyFetcher.Fetch(urlRef); e == nil {
 		actor.State.Seen[urlRef] = true
 		actor.populateUrlRefsToVisit(urlRefsToVisit, urlRefs)
 	}
@@ -142,56 +201,65 @@ func (actor *Actor) fetchAndUpdate(urlRef string, urlRefsToVisit chan string) {
 
 /* === helper functions === */
 
-func StartIthChildWebCrawlerAndGetState(
-	id int,
-	args map[string]interface{},
-	actorStates chan WebCrawlerState,
-) {
-	config := &whisk.Config{
-		AuthToken: "23bc46b1-71f6-4ed5-8c54-816aa4f8c502:123zO3xZCLrMN6v2BKK1dXYFpXlPkccOFqm12CdAsMgRU4VrNZ9lyGVCGuMDGIwP",
-		Host:      "http://172.17.0.1:3233",
-		Insecure:  true,
-	}
-
-	client, err := whisk.NewClient(http.DefaultClient, config)
-	if err != nil {
-		actorStates <- WebCrawlerState{}
-		log.Println("failed to invoke action", err)
-		fmt.Println("Failed to create new whisk client: ", err)
-		return
-	}
-
-	res, _, err := client.Actions.Invoke(fmt.Sprintf("web-crawler-c%v", id), args, true, true)
-
-	if err != nil {
-		actorStates <- WebCrawlerState{}
-		log.Println("failed to invoke action", err)
-		fmt.Println("Failed to invoke action: ", err)
-		return
-	}
-
-	if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
-		actorStates <- state
-	} else {
-		actorStates <- WebCrawlerState{}
-	}
-	actorStates <- WebCrawlerState{}
-}
-
 func GetSeedsFromArgs(args map[string]interface{}) []string {
 	// Get the seed and try to cast to []string.
 	// Return empty []string if SEED_KEY doesn't exist or error with cast,
-	if seed, ok := args[SEEDS_KEY].([]string); seed == nil && ok {
-		return make([]string, 0)
-	} else {
-		return seed
+	fmt.Println("Try to get seeds:", args[SEEDS_KEY])
+
+	// TODO this cast can be error prone.
+	s := make([]string, 0)
+	for _, v := range args[SEEDS_KEY].([]interface{}) {
+		s = append(s, fmt.Sprint(v))
 	}
+	return s
+}
+
+func NewWebCrawlerStateWithId(id int) WebCrawlerState {
+	return WebCrawlerState{Id: id, Seen: make(map[string]bool)}
 }
 
 func NewActorWithId(actorId int) Actor {
-	// TODO add new Fetcher
 	return Actor{
-		Id:     actorId,
-		Hasher: fnv.New64(),
+		Id:        actorId,
+		State:     NewWebCrawlerStateWithId(actorId),
+		MyFetcher: &WebFetcher{},
+		Hasher:    fnv.New64(),
 	}
+}
+
+/* === Fetcher Implementation */
+
+type WebFetcher struct{}
+
+// https://www.devdungeon.com/content/web-scraping-go
+func (fetcher *WebFetcher) Fetch(url string) ([]string, error) {
+	fmt.Println("Fetch page:", url)
+	// Make HTTP request
+	response, err := http.Get(url)
+	if err != nil {
+		fmt.Println("Unable to connect:", err)
+		return nil, err
+	}
+	defer response.Body.Close()
+
+	// Create a goquery document from the HTTP response
+	document, err := goquery.NewDocumentFromReader(response.Body)
+	if err != nil {
+		fmt.Println("Error loading HTTP response body:", err)
+		return nil, err
+	}
+
+	urls := make([]string, 0)
+
+	processElement :=
+		func(index int, element *goquery.Selection) {
+			// See if the href attribute exists on the element
+			href, exists := element.Attr("href")
+			if exists {
+				urls = append(urls, href)
+			}
+		}
+
+	document.Find("a").Each(processElement)
+	return urls, nil
 }
