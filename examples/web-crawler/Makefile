@@ -9,37 +9,21 @@ SRCS=main.go go.mod go.sum
 NAME=module-main
 BINZIP=$(MAIN)-bin.zip
 SRCZIP=$(MAIN)-src.zip
+ARGS_FILE=seeds.json
+
+HOST=http://localhost:3233
 
 build: $(SRCZIP)
-	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-main $(SRCZIP) --kind go:1.15-actor --main Main
-	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c0 main.go --kind go:1.15-actor --main MainChild1
-	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c1 main.go --kind go:1.15-actor --main MainChild2
-
-buildc:
-	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-main exec.zip --kind go:1.15-actor --main Main
-	# wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c0 exec.zip --kind go:1.15-actor --main MainChild1
-	# wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-c1 exec.zip --kind go:1.15-actor --main MainChild2
-
-# https://www.ibm.com/cloud/blog/running-existing-app-ibm-cloud-functions
-# broken
-mybuild:
-	env GOOS=linux GOARCH=amd64 go build -o exec
-	zip exec.zip exec
-	wsk -i --apihost http://172.17.0.1:3233 action update web-crawler-main exec.zip --kind go:1.15-actor --main Main
+	wsk -i --apihost $(HOST) action update web-crawler-main $(SRCZIP) --kind go:1.15-actor --main Main
 
 run:
-	wsk -i --apihost http://172.17.0.1:3233 action invoke web-crawler-main -b
+	wsk -i --apihost $(HOST) action invoke web-crawler-main --param-file $(ARGS_FILE) -b
 
 runv:
-	wsk -i --apihost http://172.17.0.1:3233 action invoke web-crawler-main -r -v -d
+	wsk -i --apihost $(HOST) action invoke web-crawler-main -b -v -d
 
-
-
-deploy: package.done $(BINZIP)
-	$(WSK) action update $(PACKAGE)/$(NAME) $(BINZIP) --main $(MAIN) --docker $(OW_RUNTIME)
-
-devel: package.done $(SRCZIP)
-	$(WSK) action update $(PACKAGE)/$(NAME) $(SRCZIP) --main $(MAIN) --docker $(OW_COMPILER)
+runc:
+	wsk -i --apihost $(HOST) action invoke web-crawler-c0 -b
 
 $(BINZIP): $(SRCS) $(VENDORS) $(SRCZIP)
 	docker run -i $(OW_COMPILER) -compile $(MAIN) -debug <$(SRCZIP) >$(BINZIP)
@@ -51,9 +35,6 @@ clean:
 	-$(WSK) action delete $(PACKAGE)/$(NAME)
 	-rm $(BINZIP) $(SRCZIP) package.done test.json
 	-rm test.out
-
-package.done:
-	$(WSK) package update $(PACKAGE)
-	touch package.done
+	-rm *.zip
 
 .PHONY: deploy devel test clean
