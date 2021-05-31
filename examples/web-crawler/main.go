@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
+	"math/rand"
 	"net/http"
 	"net/url"
 
@@ -40,62 +41,16 @@ type Fetcher interface {
 type Interface interface{}
 
 func Main(args map[string]interface{}, state *interface{}) map[string]interface{} {
-	fmt.Println("Into main: ", args, *state)
-
-	var unorderedChildActorStates []WebCrawlerState
-	states := ParseActorStates(state)
-	actorStates := make(chan WebCrawlerState)
-
-	fns := []func(map[string]interface{}, *interface{}) map[string]interface{}{
-		Mainchild1}
-
-	// Start web crawl jobs
-	for i := 0; i < len(fns); i++ {
-		go func(actorId int) {
-			var res map[string]interface{}
-			var tempState interface{}
-			tempState, e := findState(states, actorId)
-			if e != nil {
-				fmt.Println("Did not find a previous state for", actorId)
-				res = fns[actorId](args, nil)
-			} else {
-				fmt.Println("Found a previous state for", actorId)
-				res = fns[actorId](args, &tempState)
-			}
-			if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
-				actorStates <- state
-			} else {
-				actorStates <- WebCrawlerState{}
-			}
-		}(i)
-	}
-
-	// wait on jobs to complete
-	for i := 0; i < len(fns); i++ {
-		unorderedChildActorStates = append(unorderedChildActorStates, <-actorStates)
-	}
-
-	// Save the state
-	*state = unorderedChildActorStates
-
-	return map[string]interface{}{
-		"actorStates": unorderedChildActorStates,
-	}
+	// single actor.
+	child_ret := Mainchild1(args, state)
+	(*state) = child_ret[STATE_KEY]
+	return child_ret
 }
 
-func findState(states []WebCrawlerState, id int) (WebCrawlerState, error) {
-	for _, state := range states {
-		if state.Id == id {
-			return state, nil
-		}
-	}
-	return WebCrawlerState{}, fmt.Errorf("state %d not found", id)
-}
-
-//func Mainchild1(args map[string]interface{}, state *interface{}) map[string]interface{} {
 func Mainchild1(args map[string]interface{}, state *interface{}) map[string]interface{} {
 	const actorId = 0
 	seeds := GetSeedsFromArgs(args)
+	rand.Shuffle(len(seeds), func(i, j int) { seeds[i], seeds[j] = seeds[j], seeds[i] })
 	actor := NewActorWithId(actorId)
 	actor.UseLatestState(state)
 	return actor.StartWebCrawlerAndReturnWebCrawlerState(seeds)
