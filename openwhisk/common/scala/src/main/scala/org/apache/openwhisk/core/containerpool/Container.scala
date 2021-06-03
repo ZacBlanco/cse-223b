@@ -111,8 +111,11 @@ trait Container {
 
   /** Checkpoint a container. Default is to do nothing */
   def checkpoint()(implicit transid: TransactionId): Future[Unit] = {
+    // WhiskCheckpoint.put(store, )
     Future.successful({})
   }
+
+  def checkpointDir: String = s"/tmp/${id}"
 
   /** Initializes code in the container. */
   def initialize(initializer: JsObject,

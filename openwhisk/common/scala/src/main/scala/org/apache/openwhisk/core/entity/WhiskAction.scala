@@ -35,6 +35,13 @@ import org.apache.openwhisk.core.database.DocumentFactory
 import org.apache.openwhisk.core.database.CacheChangeNotification
 import org.apache.openwhisk.core.entity.Attachments._
 import org.apache.openwhisk.core.entity.types.EntityStore
+import org.apache.openwhisk.common.Logging
+import java.nio.file.Path
+import java.nio.file.Files
+import java.util.zip.ZipOutputStream
+import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
+import java.io.FileOutputStream
 
 /**
  * ActionLimitsOption mirrors ActionLimits but makes both the timeout and memory
@@ -359,6 +366,99 @@ case class ExecutableWhiskActionMetaData(namespace: EntityPath,
   def bindingFullyQualifiedName: Option[FullyQualifiedEntityName] =
     binding.map(ns => FullyQualifiedEntityName(ns, name, None))
 
+}
+
+/**
+ *
+ * An object representing a docker container checkpoint.
+ *
+ * @param namespace the namespace of the action which this checkpoint belongs
+ * @param name the name of the action to which the checkpoint belongs
+ * @param checkpointName the name of the checkpoint used when created via docker
+ * @param checkpoint a base64 encoded string of a zip file representing the checkpoint
+ *
+ * */
+case class WhiskCheckpoint(namespace: EntityPath, override val name: EntityName, checkpointName: String, checkpoint: String) extends WhiskEntity(name, "checkpoint") {
+
+  override def toJson: JsObject = JsObject(
+    "namespace" -> namespace.toJson,
+    "name" -> name.toJson,
+    "checkpointName" -> checkpointName.toJson,
+    "checkpoint" -> checkpoint.toJson,
+  )
+
+  override val version: SemVer = ???
+
+  override val publish: Boolean = true
+
+  override val annotations: Parameters = Parameters()
+
+  /**
+    * Writes a restore-able checkpoint to the filesystem.
+    *
+    * @param containerId the checkpoint name
+    * @return the path on disk to the checkpoint
+    */
+  def writeCheckpoint()(implicit logger: Logging): Future[Path] = {
+    Try(Files.createTempDirectory(s"invokerCheckpoint-$name-$namespace")) match {
+      case Success(value) =>
+          val fis = Base64.getDecoder.wrap(new ByteArrayInputStream(checkpoint.getBytes()))
+          val zis = new ZipInputStream(fis)
+          Stream.continually(zis.getNextEntry).takeWhile(_ != null).foreach { file =>
+              val fout = new FileOutputStream(file.getName)
+              val buffer = new Array[Byte](1024)
+              Stream.continually(zis.read(buffer)).takeWhile(_ != -1).foreach(fout.write(buffer, 0, _))
+          }
+          Future.successful(value)
+      case Failure(exception) =>
+        logger.error(this, s"failed to unzip checkpoint: ${exception}")
+        Future.failed(exception)
+    }
+  }
+
+}
+
+
+
+object WhiskCheckpoint extends DocumentFactory[WhiskCheckpoint] with DefaultJsonProtocol {
+
+  implicit val serdes: RootJsonFormat[WhiskCheckpoint] = jsonFormat(
+    WhiskCheckpoint.apply,
+    "namespace",
+    "name",
+    "checkpointName",
+    "checkpoint",
+    );
+
+
+    /**
+      * Create a checkpoint based on an existing path on the system
+      *
+      * @param name the name of the action for the checkpoint
+      * @param checkpointName the name of the checkpoint
+      * @param localDir the directory where the checkpoint is stored
+      * @return a serialized checkpoint object
+      */
+  def createCheckpoint(name: FullyQualifiedEntityName, checkpointName: String, localDir: Path)(implicit transid: TransactionId): WhiskCheckpoint = {
+    val ckptDir = Files.list(localDir)
+    var buffer = new Array[Byte](8192)
+    val ckptPath = Files.createTempFile(s"dockerCkPt-${name.name}", null)
+    val bos = new ByteArrayOutputStream(1024 * 1024 * 5) // 5MB initially
+    val zipStream = new ZipOutputStream(bos)
+    ckptDir.forEach(p => {
+      zipStream.putNextEntry(new ZipEntry(p.getFileName().toString()))
+      val in = Files.newInputStream(p)
+      var b = in.read(buffer, 0, buffer.size)
+      while (b > -1) {
+        zipStream.write(buffer, 0, b)
+        b = in.read(buffer)
+      }
+      in.close()
+      zipStream.closeEntry()
+    })
+    zipStream.close()
+    WhiskCheckpoint(name.path, name.name, checkpointName, new String(Base64.getEncoder().encode(bos.toByteArray())))
+  }
 }
 
 object WhiskAction extends DocumentFactory[WhiskAction] with WhiskEntityQueries[WhiskAction] with DefaultJsonProtocol {

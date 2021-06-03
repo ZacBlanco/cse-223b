@@ -38,8 +38,10 @@ import org.apache.openwhisk.common.{Logging, LoggingMarkers, MetricEmitter, Tran
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.containerpool.ContainerId
 import org.apache.openwhisk.core.containerpool.ContainerAddress
+import org.apache.openwhisk.core.entity.WhiskCheckpoint
 
 import scala.concurrent.duration.Duration
+import org.apache.openwhisk.core.entity.WhiskActionMetaData
 
 object DockerContainerId {
 
@@ -182,8 +184,20 @@ class DockerClient(dockerHost: Option[String] = None,
     runCmd(cmd, config.timeouts.ps).map(_.linesIterator.toSeq.map(ContainerId.apply))
   }
 
-  def checkpoint(id: ContainerId)(implicit transid: TransactionId): Future[Unit] =
-    runCmd(Seq("checkpoint", id.asString), config.timeouts.unpause).map(_ => ())
+  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskActionMetaData)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
+    runCmd(Seq("checkpoint", "create", "--leave-running", "--checkpoint-dir", s"/tmp/${id.asString}", id.asString), config.timeouts.unpause)
+      .flatMap { x =>
+        val x = for {
+          dir <- Try(Files.createTempDirectory(s"checkpoint-${id}"))
+          ckpt <- Try(WhiskCheckpoint.createCheckpoint(action.fullyQualifiedName(false), checkpointName, dir))
+        } yield ckpt
+        Future.fromTry(x)
+      }
+  }
+
+  def create(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit] = ???
+
+  def start(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit] = ???
 
   /**
    * Stores pulls that are currently being executed and collapses multiple
@@ -305,6 +319,24 @@ trait DockerApi {
    * @return a Future completing according to the command's exit-code
    */
   def checkpoint(id: ContainerId)(implicit transid: TransactionId): Future[Unit]
+
+  /**
+    * Creates, but does not start a new container
+    *
+    * @param image the container image to run
+    * @param args additional arguments to the creation
+    * @return the future completion according to the command exit code
+    */
+  def create(image: String, args: Seq[String])(implicit transid: TransactionId): Future[ContainerId]
+
+  /**
+    * Starts a created container
+    *
+    * @param id the container id to run
+    * @param args additional arguments to the start of the container
+    * @return the future completion according to the command exit code
+    */
+  def start(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit]
 }
 
 /** Indicates any error while starting a container that leaves a broken container behind that needs to be removed */

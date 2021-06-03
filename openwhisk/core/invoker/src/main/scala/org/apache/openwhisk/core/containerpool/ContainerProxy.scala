@@ -666,7 +666,9 @@ class ContainerProxy(factory: (TransactionId,
   def destroyContainer(newData: ContainerStarted,
                        replacePrewarm: Boolean,
                        abort: Boolean = false,
-                       abortResponse: Option[ActivationResponse] = None) = {
+                       abortResponse: Option[ActivationResponse] = None,
+                       action: Option[ExecutableWhiskAction] = None,
+                       ) = {
     val container = newData.container
     if (!rescheduleJob) {
       context.parent ! ContainerRemoved(replacePrewarm)
@@ -686,6 +688,21 @@ class ContainerProxy(factory: (TransactionId,
     }
 
     unpause
+      .flatMap(_ => {
+        Future.successful(action.flatMap({ f =>
+          f.stateful match {
+            case true => {
+              // TODO @alisha
+              // insert code to checkpoint the container state to a particular directory
+              // then, store the directory using WhiskCheckpoint.put() and WhiskCheckpoint.serializeCheckpoint
+              container.checkpointDir
+              // tmp return value
+              None
+            }
+            case false => None
+          }
+        }))
+      })
       .flatMap(_ => container.destroy()(TransactionId.invokerNanny))
       .flatMap(_ => abortProcess)
       .map(_ => ContainerRemoved(replacePrewarm))

@@ -1,2 +1,4 @@
 .metals/
 .vscode/
+
+openwhisk-runtime-go/.gradle

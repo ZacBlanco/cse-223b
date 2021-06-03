@@ -39,6 +39,7 @@ import spray.json._
 import org.apache.openwhisk.core.containerpool.logging.LogLine
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.http.Messages
+import org.apache.openwhisk.core.entity.WhiskCheckpoint
 
 object DockerContainer {
 
@@ -70,7 +71,8 @@ object DockerContainer {
              dnsOptions: Seq[String] = Seq.empty,
              name: Option[String] = None,
              useRunc: Boolean = true,
-             dockerRunParameters: Map[String, Set[String]])(implicit docker: DockerApiWithFileAccess,
+             dockerRunParameters: Map[String, Set[String]],
+             fromCheckpoint: Option[WhiskCheckpoint] = None)(implicit docker: DockerApiWithFileAccess,
                                                             runc: RuncApi,
                                                             as: ActorSystem,
                                                             ec: ExecutionContext,
@@ -124,24 +126,31 @@ object DockerContainer {
         Future.successful(true)
     }
 
+    val containerId = fromCheckpoint match {
+      case Some(checkpoint) =>
+        for {
+          cpt <- checkpoint.writeCheckpoint()
+          container <- docker.create(imageToUse, args)
+          aaa <- docker.start(container, Seq("--checkpoint", checkpoint.checkpointName, "--checkpoint-dir", cpt.toAbsolutePath().toString()))
+        } yield container
+      case None =>
+        docker.run(imageToUse, args).recoverWith {
+          case BrokenDockerContainer(brokenId, _) =>
+            // Remove the broken container - but don't wait or check for the result.
+            // If the removal fails, there is nothing we could do to recover from the recovery.
+            docker.rm(brokenId)
+            Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
+          case _ =>
+            // Iff the pull was successful, we assume that the error is not due to an image pull error, otherwise
+            // the docker run was a backup measure to try and start the container anyway. If it fails again, we assume
+            // the image could still not be pulled and wasn't available locally.
+            Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
+        }
+    }
+
     for {
       pullSuccessful <- pulled
-      id <- docker.run(imageToUse, args).recoverWith {
-        case BrokenDockerContainer(brokenId, _) =>
-          // Remove the broken container - but don't wait or check for the result.
-          // If the removal fails, there is nothing we could do to recover from the recovery.
-          docker.rm(brokenId)
-          Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
-        case _ =>
-          // Iff the pull was successful, we assume that the error is not due to an image pull error, otherwise
-          // the docker run was a backup measure to try and start the container anyway. If it fails again, we assume
-          // the image could still not be pulled and wasn't available locally.
-          if (pullSuccessful) {
-            Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
-          } else {
-            Future.failed(BlackboxStartupError(Messages.imagePullError(imageToUse)))
-          }
-      }
+      id <- containerId
       ip <- docker.inspectIPAddress(id, network).recoverWith {
         // remove the container immediately if inspect failed as
         // we cannot recover that case automatically

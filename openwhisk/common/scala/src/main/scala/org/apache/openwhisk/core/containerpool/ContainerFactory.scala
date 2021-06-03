@@ -26,6 +26,7 @@ import org.apache.openwhisk.spi.Spi
 import scala.concurrent.Future
 import scala.concurrent.duration.FiniteDuration
 import scala.math.max
+import org.apache.openwhisk.core.entity.WhiskCheckpoint
 
 case class ContainerArgsConfig(network: String,
                                dnsServers: Seq[String] = Seq.empty,
@@ -114,8 +115,9 @@ trait ContainerFactory {
     userProvidedImage: Boolean,
     memory: ByteSize,
     cpuShares: Int,
-    action: Option[ExecutableWhiskAction])(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
-    createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares)
+    action: Option[ExecutableWhiskAction],
+    checkpoint: Option[WhiskCheckpoint])(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+    createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares, fromCheckpoint = checkpoint)
   }
 
   def createContainer(tid: TransactionId,
@@ -124,6 +126,17 @@ trait ContainerFactory {
                       userProvidedImage: Boolean,
                       memory: ByteSize,
                       cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container]
+
+  def createContainer(tid: TransactionId,
+                      name: String,
+                      actionImage: ExecManifest.ImageName,
+                      userProvidedImage: Boolean,
+                      memory: ByteSize,
+                      cpuShares: Int,
+                      fromCheckpoint: Option[WhiskCheckpoint] = None,
+                      )(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+                        createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares)
+                      }
 
   /** perform any initialization */
   def init(): Unit

@@ -36,6 +36,7 @@ import java.util.concurrent.TimeoutException
 import pureconfig._
 import pureconfig.generic.auto._
 import org.apache.openwhisk.core.ConfigKeys
+import org.apache.openwhisk.core.entity.WhiskCheckpoint
 
 case class DockerContainerFactoryConfig(useRunc: Boolean)
 
@@ -62,7 +63,9 @@ class DockerContainerFactory(instance: InvokerInstanceId,
                                actionImage: ExecManifest.ImageName,
                                userProvidedImage: Boolean,
                                memory: ByteSize,
-                               cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+                               cpuShares: Int,
+                               fromCheckpoint: Option[WhiskCheckpoint] = None,
+                               )(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
     val registryConfig =
       ContainerFactory.resolveRegistryConfig(userProvidedImage, runtimesRegistryConfig, userImagesRegistryConfig)
     val image = if (userProvidedImage) Left(actionImage) else Right(actionImage)
@@ -79,7 +82,8 @@ class DockerContainerFactory(instance: InvokerInstanceId,
       dnsOptions = containerArgsConfig.dnsOptions,
       name = Some(name),
       useRunc = dockerContainerFactoryConfig.useRunc,
-      parameters ++ containerArgsConfig.extraArgs.map { case (k, v) => ("--" + k, v) })
+      parameters ++ containerArgsConfig.extraArgs.map { case (k, v) => ("--" + k, v) },
+      fromCheckpoint = fromCheckpoint)
   }
 
   /** Perform cleanup on init */
