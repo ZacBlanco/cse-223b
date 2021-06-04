@@ -692,6 +692,19 @@ class ContainerProxy(factory: (TransactionId,
         Future.successful(action.flatMap({ f =>
           f.stateful match {
             case true => {
+              // Convert action to WhiskActionMetaData
+              val exec = f.exec.asInstanceOf[ExecMetaData]
+              val metadata = WhiskActionMetaData(f.namespace, f.name, exec, f.parameters, f.limits, f.version, f.publish, f.annotations, f.updated, f.binding, f.stateful)
+              // TODO figure out checkpoint name
+              val checkpointResult = container.checkpoint("TODO checkpoint name", metadata)(TransactionId.invokerNanny)
+
+              checkpointResult.flatMap(checkpoint => {
+                checkpoint.asInstanceOf[WhiskCheckpoint].writeCheckpoint()(logging)
+              })
+              // .recoverWith {
+              //   logging.error(this, "failed to checkpoint container")
+              // }
+
               // TODO @alisha
               // insert code to checkpoint the container state to a particular directory
               // then, store the directory using WhiskCheckpoint.put() and WhiskCheckpoint.serializeCheckpoint

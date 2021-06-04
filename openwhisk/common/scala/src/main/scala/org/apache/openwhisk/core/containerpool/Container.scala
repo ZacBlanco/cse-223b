@@ -37,6 +37,7 @@ import org.apache.openwhisk.http.Messages
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration.{Duration, FiniteDuration, _}
 import scala.util.{Failure, Success}
+import org.apache.openwhisk.core.entity.WhiskActionMetaData
 
 /**
  * An OpenWhisk biased container abstraction. This is **not only** an abstraction
@@ -110,7 +111,7 @@ trait Container {
   }
 
   /** Checkpoint a container. Default is to do nothing */
-  def checkpoint()(implicit transid: TransactionId): Future[Unit] = {
+  def checkpoint(checkpointName: String, action: WhiskActionMetaData)(implicit transid: TransactionId): Future[Unit] = {
     // WhiskCheckpoint.put(store, )
     Future.successful({})
   }

@@ -318,7 +318,7 @@ trait DockerApi {
    * @param id the id of the container to remove
    * @return a Future completing according to the command's exit-code
    */
-  def checkpoint(id: ContainerId)(implicit transid: TransactionId): Future[Unit]
+  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskActionMetaData)(implicit transid: TransactionId): Future[Unit]
 
   /**
     * Creates, but does not start a new container

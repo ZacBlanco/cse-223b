@@ -40,6 +40,7 @@ import org.apache.openwhisk.core.containerpool.logging.LogLine
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.http.Messages
 import org.apache.openwhisk.core.entity.WhiskCheckpoint
+import org.apache.openwhisk.core.entity.WhiskActionMetaData
 
 object DockerContainer {
 
@@ -199,8 +200,8 @@ class DockerContainer(protected val id: ContainerId,
     super.destroy()
     docker.rm(id)
   }
-  override def checkpoint()(implicit transid: TransactionId): Future[Unit] = {
-    docker.checkpoint(id)
+  override def checkpoint(checkpointName: String, action: WhiskActionMetaData)(implicit transid: TransactionId): Future[Unit] = {
+    docker.checkpoint(id, checkpointName, action)
   }
   /**
    * Was the container killed due to memory exhaustion?
