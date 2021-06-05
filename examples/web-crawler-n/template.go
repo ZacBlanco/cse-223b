@@ -1,12 +1,15 @@
 package main
 
 import (
+	"encoding/json"
+
 	"fmt"
 	"hash"
 	"hash/fnv"
 	"math/rand"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/apache/openwhisk-client-go/whisk"
 	"github.com/PuerkitoBio/goquery"
@@ -16,8 +19,8 @@ import (
 const (
 	SEEDS_KEY              = "seeds"
 	STATE_KEY              = "state"
-	MAX_CHANNEL_SIZE       = 100
-	MAX_NUM_PAGES_TO_VISIT = 4
+	MAX_CHANNEL_SIZE       = 500
+	MAX_NUM_PAGES_TO_VISIT = 100
 	WSK_HOST               = "http://172.17.0.1:3233"
 )
 
@@ -42,10 +45,24 @@ type Fetcher interface {
 type Interface interface{}
 
 func Main(args map[string]interface{}, state *interface{}) map[string]interface{} {
-	// single actor.
-	child_ret := Mainchild0(args, state)
-	(*state) = child_ret[STATE_KEY]
-	return child_ret
+	var unorderedChildActorStates []WebCrawlerState
+	actorStates := make(chan WebCrawlerState, NUM_ACTORS)
+
+	// Start each child actor
+	for i := 0; i < NUM_ACTORS; i++ {
+		fmt.Println("Starting child:", i, NUM_ACTORS)
+		go StartIthChildWebCrawlerAndGetState(i, args, actorStates)
+	}
+
+	for i := 0; i < NUM_ACTORS; i++ {
+		fmt.Println("Fetching data from child:", i, NUM_ACTORS)
+		unorderedChildActorStates = append(unorderedChildActorStates, <-actorStates)
+	}
+	*state = unorderedChildActorStates
+
+	return map[string]interface{}{
+		//"actorStates": unorderedChildActorStates,
+	}
 }
 
 func ParseActorStates(state *interface{}) []WebCrawlerState {
@@ -61,9 +78,11 @@ func ParseActorStates(state *interface{}) []WebCrawlerState {
 
 func (actor *Actor) UseLatestState(state *interface{}) {
 	if state == nil {
+		fmt.Println("Didnt find previous state")
 		return
 	}
 	if newState, ok := (*state).(WebCrawlerState); ok {
+		fmt.Println("Found new state")
 		actor.State = newState
 	}
 }
@@ -81,7 +100,7 @@ func (actor *Actor) crawl(seeds []string) {
 	// url references
 	urlRefsToVisit := make(chan string, MAX_CHANNEL_SIZE)
 
-	fmt.Println("Populating seeds:", actor.Id, seeds)
+	// fmt.Println("Populating seeds:", actor.Id, seeds)
 	actor.populateUrlRefsToVisit(urlRefsToVisit, seeds)
 
 	fmt.Println("Start crawling", actor.Id)
@@ -90,10 +109,9 @@ func (actor *Actor) crawl(seeds []string) {
 	for !done {
 		select {
 		case urlRef := <-urlRefsToVisit:
-			if !actor.State.Seen[urlRef] {
+			if actor.fetchAndUpdate(urlRef, urlRefsToVisit) {
 				numVisitedPages += 1
 			}
-			actor.fetchAndUpdate(urlRef, urlRefsToVisit)
 			if numVisitedPages >= MAX_NUM_PAGES_TO_VISIT {
 				done = true
 			}
@@ -122,28 +140,30 @@ func (actor *Actor) shouldVisitUrl(urlRef string) bool {
 		return false
 	}
 
-	if myUrl, e := url.Parse(urlRef); e != nil {
+	//return actor.hashTheNameAndReturnOwnerId(urlRef) == actor.Id
+	if _, e := url.Parse(urlRef); e != nil {
 		return false
 	} else {
-		return actor.hashTheNameAndReturnOwnerId(myUrl.Hostname()) == actor.Id
+		return actor.hashTheNameAndReturnOwnerId(urlRef) == actor.Id
 	}
 }
 
 func (actor *Actor) hashTheNameAndReturnOwnerId(name string) int {
 	actor.Hasher.Reset()
-	actor.Hasher.Sum([]byte(name))
+	actor.Hasher.Write([]byte(name))
 	return int(actor.Hasher.Sum64() % uint64(NUM_ACTORS))
 }
 
-func (actor *Actor) fetchAndUpdate(urlRef string, urlRefsToVisit chan string) {
+func (actor *Actor) fetchAndUpdate(urlRef string, urlRefsToVisit chan string) bool {
 	fmt.Println("fetchAndUpdate:", actor.State.Id, urlRef)
 	if actor.MyFetcher == nil || actor.State.Seen[urlRef] {
-		return
+		return false
 	}
 	if urlRefs, e := actor.MyFetcher.Fetch(urlRef); e == nil {
 		actor.State.Seen[urlRef] = true
 		actor.populateUrlRefsToVisit(urlRefsToVisit, urlRefs)
 	}
+	return true
 }
 
 /* === helper functions === */
@@ -151,7 +171,7 @@ func (actor *Actor) fetchAndUpdate(urlRef string, urlRefsToVisit chan string) {
 func GetSeedsFromArgs(args map[string]interface{}) []string {
 	// Get the seed and try to cast to []string.
 	// Return empty []string if SEED_KEY doesn't exist or error with cast,
-	fmt.Println("Try to get seeds:", args[SEEDS_KEY])
+	//fmt.Println("Try to get seeds:", args[SEEDS_KEY])
 
 	// TODO this cast can be error prone.
 	s := make([]string, 0)
@@ -192,19 +212,32 @@ func StartIthChildWebCrawlerAndGetState(
 		return
 	}
 
-	res, _, err := client.Actions.Invoke(fmt.Sprintf("web-crawler-c%v", id), args, true, true)
+	res, _, err := client.Actions.Invoke(fmt.Sprintf("web-crawler-%v", id), args, false, true)
 
 	if err != nil {
+		fmt.Println("Error invoking client:", err)
 		actorStates <- WebCrawlerState{}
 		return
 	}
 
-	if state, ok := res[STATE_KEY].(WebCrawlerState); ok {
-		actorStates <- state
-	} else {
+	jsonbody, err := json.Marshal(res[STATE_KEY])
+    if err != nil {
+        // do error check
+        fmt.Println(err)
 		actorStates <- WebCrawlerState{}
-	}
-	actorStates <- WebCrawlerState{}
+        return
+    }
+
+	state := WebCrawlerState{}
+    if err := json.Unmarshal(jsonbody, &state); err != nil {
+        // do error check
+        fmt.Println(err)
+		actorStates <- WebCrawlerState{}
+        return
+    }
+	fmt.Println(state)
+
+	actorStates <- state
 }
 
 /* === Fetcher Implementation */
