@@ -64,6 +64,9 @@ import org.apache.openwhisk.http.Messages
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.{Failure, Success}
+import scala.util.Try
+import java.nio.file.Files
+import org.apache.openwhisk.core.database.ArtifactStore
 
 // States
 sealed trait ContainerState
@@ -251,7 +254,8 @@ class ContainerProxy(factory: (TransactionId,
                                Boolean,
                                ByteSize,
                                Int,
-                               Option[ExecutableWhiskAction]) => Future[Container],
+                               Option[ExecutableWhiskAction],
+                               Option[WhiskCheckpoint]) => Future[Container],
                      sendActiveAck: ActiveAck,
                      storeActivation: (TransactionId, WhiskActivation, Boolean, UserContext) => Future[Any],
                      collectLogs: LogsCollector,
@@ -290,6 +294,7 @@ class ContainerProxy(factory: (TransactionId,
         job.exec.pull,
         job.memoryLimit,
         poolConfig.cpuShare(job.memoryLimit),
+        None,
         None)
         .map(container =>
           PreWarmCompleted(PreWarmedData(container, job.exec.kind, job.memoryLimit, expires = job.ttl.map(_.fromNow))))
@@ -302,6 +307,35 @@ class ContainerProxy(factory: (TransactionId,
       implicit val transid = job.msg.transid
       activeCount += 1
       // create a new container
+
+      if (job.action.stateful) {
+        val checkpoint: Option[WhiskCheckpoint] = ???
+        // checkpoint = WhiskCheckpoint.get(db, doc)
+        val name = ???
+        val namespace = ???
+        // Create another new tmp directory somewhere on the machine
+        Try(Files.createTempDirectory(s"invokerCheckpoint-$name-$namespace")) match {
+          case Success(value) =>
+            // TODO: Decode the base 64 and unzip the files from the WhiskCheckpoint to the tmp dir
+            
+            val container = factory(
+              job.msg.transid,
+              ContainerProxy.containerName(instance, job.msg.user.namespace.name.asString, job.action.name.asString),
+              job.action.exec.image,
+              job.action.exec.pull,
+              job.action.limits.memory.megabytes.MB,
+              poolConfig.cpuShare(job.action.limits.memory.megabytes.MB),
+              Some(job.action),
+              checkpoint)
+          case Failure(exception) =>
+            logging.error(this, s"failed to create restore tmp dir: ${exception}")
+            Future.failed(exception)
+        }
+        // Decode the base 64 and unzip the files from the WhiskCheckpoint to the tmp dir
+        // Call docker create ....
+        // Call docker start --checkpoint <tmp dir> ...
+      }
+
       val container = factory(
         job.msg.transid,
         ContainerProxy.containerName(instance, job.msg.user.namespace.name.asString, job.action.name.asString),
@@ -309,7 +343,8 @@ class ContainerProxy(factory: (TransactionId,
         job.action.exec.pull,
         job.action.limits.memory.megabytes.MB,
         poolConfig.cpuShare(job.action.limits.memory.megabytes.MB),
-        Some(job.action))
+        Some(job.action),
+        None)
 
       // container factory will either yield a new container ready to execute the action, or
       // starting up the container failed; for the latter, it's either an internal error starting
@@ -695,11 +730,12 @@ class ContainerProxy(factory: (TransactionId,
               // Convert action to WhiskActionMetaData
               val exec = f.exec.asInstanceOf[ExecMetaData]
               val metadata = WhiskActionMetaData(f.namespace, f.name, exec, f.parameters, f.limits, f.version, f.publish, f.annotations, f.updated, f.binding, f.stateful)
-              // TODO figure out checkpoint name
+              // TODO: figure out checkpoint name
               val checkpointResult = container.checkpoint("TODO checkpoint name", metadata)(TransactionId.invokerNanny)
 
               checkpointResult.flatMap(checkpoint => {
-                checkpoint.asInstanceOf[WhiskCheckpoint].writeCheckpoint()(logging)
+                val db: ArtifactStore = ???
+                WhiskCheckpoint.put(db, checkpoint.asInstanceOf[WhiskCheckpoint])
               })
               // .recoverWith {
               //   logging.error(this, "failed to checkpoint container")
@@ -1006,7 +1042,8 @@ object ContainerProxy {
                       Boolean,
                       ByteSize,
                       Int,
-                      Option[ExecutableWhiskAction]) => Future[Container],
+                      Option[ExecutableWhiskAction],
+                      Option[WhiskCheckpoint]) => Future[Container],
             ack: ActiveAck,
             store: (TransactionId, WhiskActivation, Boolean, UserContext) => Future[Any],
             collectLogs: LogsCollector,
