@@ -52,6 +52,7 @@ func Main(args map[string]interface{}, state *interface{}) map[string]interface{
 	for i := 0; i < NUM_ACTORS; i++ {
 		fmt.Println("Starting child:", i, NUM_ACTORS)
 		go StartIthChildWebCrawlerAndGetState(i, args, actorStates)
+		//time.Sleep(500 * time.Millisecond)
 	}
 
 	for i := 0; i < NUM_ACTORS; i++ {

@@ -1,4 +1,4 @@
-N=5
+N=100
 WSK?=wsk
 MAIN=main
 MAIN_CHILD=Mainchild
