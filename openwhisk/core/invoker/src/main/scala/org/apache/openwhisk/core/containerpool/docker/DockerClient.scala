@@ -21,7 +21,6 @@ import java.io.FileNotFoundException
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.Semaphore
-
 import akka.actor.ActorSystem
 
 import scala.collection.concurrent.TrieMap
@@ -38,10 +37,9 @@ import org.apache.openwhisk.common.{Logging, LoggingMarkers, MetricEmitter, Tran
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.containerpool.ContainerId
 import org.apache.openwhisk.core.containerpool.ContainerAddress
-import org.apache.openwhisk.core.entity.WhiskCheckpoint
+import org.apache.openwhisk.core.entity.{WhiskAction, WhiskCheckpoint}
 
 import scala.concurrent.duration.Duration
-import org.apache.openwhisk.core.entity.WhiskActionMetaData
 
 object DockerContainerId {
 
@@ -184,7 +182,7 @@ class DockerClient(dockerHost: Option[String] = None,
     runCmd(cmd, config.timeouts.ps).map(_.linesIterator.toSeq.map(ContainerId.apply))
   }
 
-  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskActionMetaData)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
+  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
     runCmd(Seq("checkpoint", "create", "--leave-running", "--checkpoint-dir", s"/tmp/${id.asString}", id.asString), config.timeouts.unpause)
       .flatMap { x =>
         val x = for {
@@ -195,9 +193,40 @@ class DockerClient(dockerHost: Option[String] = None,
       }
   }
 
-  def create(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit] = ???
+  def create(image: String, args: Seq[String])(implicit transid: TransactionId): Future[ContainerId] = {
+    Future {
+      blocking {
+        // Acquires a permit from this semaphore, blocking until one is available, or the thread is interrupted.
+        // Throws InterruptedException if the current thread is interrupted
+        runSemaphore.acquire()
+      }
+    }.flatMap { _ =>
+      // Iff the semaphore was acquired successfully
+      runCmd(Seq("start") ++ args ++ Seq(image), config.timeouts.run)
+        .andThen {
+          // Release the semaphore as quick as possible regardless of the runCmd() result
+          case _ => runSemaphore.release()
+        }
+        .map(ContainerId.apply)
+        .recoverWith {
+          // https://docs.docker.com/v1.12/engine/reference/run/#/exit-status
+          // Exit status 125 means an error reported by the Docker daemon.
+          // Examples:
+          // - Unrecognized option specified
+          // - Not enough disk space
+          case pre: ProcessUnsuccessfulException if pre.exitStatus == ExitStatus(125) =>
+            Future.failed(
+              DockerContainerId
+                .parse(pre.stdout)
+                .map(BrokenDockerContainer(_, s"Broken container: ${pre.getMessage}"))
+                .getOrElse(pre))
+        }
+    }
+  }
 
-  def start(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit] = ???
+  def start(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit] = {
+    runCmd(Seq("start") ++ args, config.timeouts.run).map(_ => ())
+  }
 
   /**
    * Stores pulls that are currently being executed and collapses multiple
@@ -318,7 +347,7 @@ trait DockerApi {
    * @param id the id of the container to remove
    * @return a Future completing according to the command's exit-code
    */
-  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskActionMetaData)(implicit transid: TransactionId): Future[Unit]
+  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint]
 
   /**
     * Creates, but does not start a new container

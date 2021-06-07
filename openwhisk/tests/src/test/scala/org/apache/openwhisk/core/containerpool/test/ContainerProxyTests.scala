@@ -19,17 +19,17 @@ package org.apache.openwhisk.core.containerpool.test
 
 import java.net.InetSocketAddress
 import java.time.Instant
-
 import akka.actor.FSM.{CurrentState, SubscribeTransitionCallBack, Transition}
 import akka.actor.{ActorRef, ActorSystem, FSM}
 import akka.stream.scaladsl.Source
 import akka.testkit.{CallingThreadDispatcher, ImplicitSender, TestKit, TestProbe}
 import akka.util.ByteString
 import common.{LoggedFunction, StreamLogging, SynchronizedLoggedFunction, WhiskProperties}
+
 import java.time.temporal.ChronoUnit
 import java.util.concurrent.atomic.AtomicInteger
-
 import akka.io.Tcp.{Close, CommandFailed, Connect, Connected}
+import akka.stream.ActorMaterializer
 import org.junit.runner.RunWith
 import org.scalatest.junit.JUnitRunner
 import org.scalatest.{BeforeAndAfterAll, FlatSpecLike, Matchers}
@@ -37,13 +37,7 @@ import spray.json.DefaultJsonProtocol._
 import spray.json._
 import org.apache.openwhisk.common.{Logging, TransactionId}
 import org.apache.openwhisk.core.ack.ActiveAck
-import org.apache.openwhisk.core.connector.{
-  AcknowledegmentMessage,
-  ActivationMessage,
-  CombinedCompletionAndResultMessage,
-  CompletionMessage,
-  ResultMessage
-}
+import org.apache.openwhisk.core.connector.{AcknowledegmentMessage, ActivationMessage, CombinedCompletionAndResultMessage, CompletionMessage, ResultMessage}
 import org.apache.openwhisk.core.containerpool.WarmingData
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.containerpool.logging.LogCollectingException
@@ -51,7 +45,8 @@ import org.apache.openwhisk.core.entity.ExecManifest.{ImageName, RuntimeManifest
 import org.apache.openwhisk.core.entity._
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
-import org.apache.openwhisk.core.database.UserContext
+import org.apache.openwhisk.core.database.{AttachmentStore, DocumentSerializer, UserContext}
+import org.apache.openwhisk.core.database.memory.{MemoryArtifactStoreProvider, MemoryAttachmentStoreProvider}
 import org.apache.openwhisk.core.entity.ActivationResponse.ContainerResponse
 import org.apache.openwhisk.core.invoker.Invoker
 
@@ -59,6 +54,7 @@ import scala.collection.mutable
 import scala.concurrent.Await
 import scala.concurrent.duration._
 import scala.concurrent.{ExecutionContext, Future, Promise}
+import scala.reflect.{ClassTag, classTag}
 
 @RunWith(classOf[JUnitRunner])
 class ContainerProxyTests
@@ -238,7 +234,7 @@ class ContainerProxyTests
 
   /** Creates an inspectable factory */
   def createFactory(response: Future[Container]) = LoggedFunction {
-    (_: TransactionId, _: String, _: ImageName, _: Boolean, _: ByteSize, _: Int, _: Option[ExecutableWhiskAction]) =>
+    (_: TransactionId, _: String, _: ImageName, _: Boolean, _: ByteSize, _: Int, _: Option[ExecutableWhiskAction], _: Option[WhiskCheckpoint]) =>
       response
   }
 
@@ -272,6 +268,21 @@ class ContainerProxyTests
     (transid: TransactionId, activation: WhiskActivation, isBlockingActivation: Boolean, context: UserContext) =>
       Future.successful(())
   }
+
+  def createEntityStore = {
+    implicit val materializer: ActorMaterializer = ActorMaterializer()
+    MemoryArtifactStoreProvider.makeArtifactStore[WhiskEntity](getAttachmentStore[WhiskEntity]())(
+      classTag[WhiskEntity],
+      WhiskEntityJsonFormat,
+      WhiskDocumentReader,
+      system,
+      logging,
+      materializer)
+  }
+
+  protected def getAttachmentStore[D <: DocumentSerializer: ClassTag]()(implicit materializer: ActorMaterializer): AttachmentStore =
+    MemoryAttachmentStoreProvider.makeStore()
+
   def createSyncStore = SynchronizedLoggedFunction {
     (transid: TransactionId, activation: WhiskActivation, isBlockingActivation: Boolean, context: UserContext) =>
       Future.successful(())
@@ -316,6 +327,7 @@ class ContainerProxyTests
     val container = new TestContainer
     val factory = createFactory(Future.successful(container))
     val store = createStore
+
     val machine =
       childActorOf(
         ContainerProxy
@@ -326,13 +338,14 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, Some("myname"), userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
     preWarm(machine)
 
     factory.calls should have size 1
-    val (tid, name, _, _, memory, cpuShares, _) = factory.calls(0)
+    val (tid, name, _, _, memory, cpuShares, _, _) = factory.calls(0)
     tid shouldBe TransactionId.invokerWarmup
     name should fullyMatch regex """wskmyname\d+_\d+_prewarm_actionKind"""
     memory shouldBe memoryLimit
@@ -356,6 +369,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -401,6 +415,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -465,6 +480,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -516,6 +532,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -557,6 +574,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -596,6 +614,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -653,6 +672,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecks,
             pauseGrace = pauseGrace,
             tcp = Some(tcpProbe.ref)))
@@ -780,6 +800,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -824,6 +845,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -939,6 +961,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -1009,6 +1032,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -1077,6 +1101,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -1138,6 +1163,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -1195,6 +1221,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -1253,6 +1280,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -1306,6 +1334,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace)
           .withDispatcher(CallingThreadDispatcher.Id))
@@ -1367,6 +1396,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = timeout))
     registerCallback(machine)
@@ -1444,6 +1474,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1490,6 +1521,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1543,6 +1575,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1582,6 +1615,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1620,6 +1654,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1662,6 +1697,7 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1714,6 +1750,7 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1766,6 +1803,7 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1805,6 +1843,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(true),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1845,6 +1884,7 @@ class ContainerProxyTests
             createCollector(),
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1892,6 +1932,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -1952,6 +1993,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)
@@ -2001,6 +2043,7 @@ class ContainerProxyTests
             collector,
             InvokerInstanceId(0, userMemory = defaultUserMemory),
             poolConfig,
+            createEntityStore,
             healthchecksConfig(),
             pauseGrace = pauseGrace))
     registerCallback(machine)

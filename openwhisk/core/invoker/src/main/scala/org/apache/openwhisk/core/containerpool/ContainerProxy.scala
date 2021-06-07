@@ -265,7 +265,8 @@ class ContainerProxy(factory: (TransactionId,
                      activationErrorLoggingConfig: ContainerProxyActivationErrorLogConfig,
                      unusedTimeout: FiniteDuration,
                      pauseGrace: FiniteDuration,
-                     testTcp: Option[ActorRef])
+                     testTcp: Option[ActorRef],
+                     db: ArtifactStore[WhiskEntity])
     extends FSM[ContainerState, ContainerData]
     with Stash {
   implicit val ec = context.system.dispatcher
@@ -570,7 +571,7 @@ class ContainerProxy(factory: (TransactionId,
 
   when(Paused, stateTimeout = unusedTimeout) {
     case Event(job: Run, data: WarmedData) =>
-      implicit val transid = job.msg.transid
+      implicit val transid: TransactionId = job.msg.transid
       activeCount += 1
       val newData = data.withResumeRun(job)
       data.container
@@ -723,34 +724,22 @@ class ContainerProxy(factory: (TransactionId,
     }
 
     unpause
-      .flatMap(_ => {
-        Future.successful(action.flatMap({ f =>
-          f.stateful match {
-            case true => {
-              // Convert action to WhiskActionMetaData
-              val exec = f.exec.asInstanceOf[ExecMetaData]
-              val metadata = WhiskActionMetaData(f.namespace, f.name, exec, f.parameters, f.limits, f.version, f.publish, f.annotations, f.updated, f.binding, f.stateful)
-              // TODO: figure out checkpoint name
-              val checkpointResult = container.checkpoint("TODO checkpoint name", metadata)(TransactionId.invokerNanny)
-
-              checkpointResult.flatMap(checkpoint => {
-                val db: ArtifactStore = ???
-                WhiskCheckpoint.put(db, checkpoint.asInstanceOf[WhiskCheckpoint])
-              })
-              // .recoverWith {
-              //   logging.error(this, "failed to checkpoint container")
-              // }
-
-              // TODO @alisha
-              // insert code to checkpoint the container state to a particular directory
-              // then, store the directory using WhiskCheckpoint.put() and WhiskCheckpoint.serializeCheckpoint
-              container.checkpointDir
-              // tmp return value
-              None
-            }
-            case false => None
+      .flatMap({ _ =>
+        action.flatMap({ f =>
+          if (f.stateful) {
+            val docInfo = for {
+              ckpt <- container.checkpoint("TODOCheckpointName", f.toWhiskAction)(TransactionId.invokerNanny)
+              x <- WhiskCheckpoint.put(db, ckpt, None)(TransactionId.invokerNanny, None)
+            } yield x
+            logging.debug(this, s"successfully stored checkpoint: $docInfo")
+            Some(docInfo)
+          } else {
+            None
           }
-        }))
+        }) match {
+          case Some(value) => value
+          case None => Future.failed(new Exception("didn't store ckpt?"))
+        }
       })
       .flatMap(_ => container.destroy()(TransactionId.invokerNanny))
       .flatMap(_ => abortProcess)
@@ -1049,12 +1038,14 @@ object ContainerProxy {
             collectLogs: LogsCollector,
             instance: InvokerInstanceId,
             poolConfig: ContainerPoolConfig,
+            entityStore: ArtifactStore[WhiskEntity],
             healthCheckConfig: ContainerProxyHealthCheckConfig =
-              loadConfigOrThrow[ContainerProxyHealthCheckConfig](ConfigKeys.containerProxyHealth),
+            loadConfigOrThrow[ContainerProxyHealthCheckConfig](ConfigKeys.containerProxyHealth),
             activationErrorLogConfig: ContainerProxyActivationErrorLogConfig = activationErrorLogging,
             unusedTimeout: FiniteDuration = timeouts.idleContainer,
             pauseGrace: FiniteDuration = timeouts.pauseGrace,
-            tcp: Option[ActorRef] = None) =
+            tcp: Option[ActorRef] = None,
+           ) =
     Props(
       new ContainerProxy(
         factory,
@@ -1067,7 +1058,8 @@ object ContainerProxy {
         activationErrorLogConfig,
         unusedTimeout,
         pauseGrace,
-        tcp))
+        tcp,
+        entityStore))
 
   // Needs to be thread-safe as it's used by multiple proxies concurrently.
   private val containerCount = new Counter

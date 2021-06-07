@@ -138,6 +138,11 @@ class DockerContainerFactory(instance: InvokerInstanceId,
       }
     Await.ready(cleaning, 30.seconds)
   }
+
+  override def createContainer(tid: TransactionId, name: String, actionImage: ExecManifest.ImageName,
+                               userProvidedImage: Boolean, memory: ByteSize, cpuShares: Int)
+                              (implicit config: WhiskConfig, logging: Logging): Future[Container] =
+    createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares, None)
 }
 
 object DockerContainerFactoryProvider extends ContainerFactoryProvider {

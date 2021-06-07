@@ -19,7 +19,6 @@ package org.apache.openwhisk.core.containerpool.docker.test
 
 import java.io.IOException
 import java.time.Instant
-
 import akka.stream.ActorMaterializer
 import akka.stream.scaladsl.{Sink, Source}
 import akka.util.ByteString
@@ -43,7 +42,7 @@ import org.apache.openwhisk.common.LogMarker
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.containerpool.docker._
-import org.apache.openwhisk.core.entity.ActivationResponse
+import org.apache.openwhisk.core.entity.{ActivationResponse, WhiskAction, WhiskCheckpoint}
 import org.apache.openwhisk.core.entity.ActivationResponse.ContainerResponse
 import org.apache.openwhisk.core.entity.ActivationResponse.Timeout
 import org.apache.openwhisk.core.entity.size._
@@ -860,5 +859,31 @@ class DockerContainerTests
       rawContainerLogsInvocations += ((containerId, fromPos, pollInterval))
       Source.single(ByteString.empty)
     }
+
+    /**
+     * Checkpoints the container with the given id.
+     *
+     * @param id the id of the container to remove
+     * @return a Future completing according to the command's exit-code
+     */
+    override def checkpoint(id: ContainerId, checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint] = ???
+
+    /**
+     * Creates, but does not start a new container
+     *
+     * @param image the container image to run
+     * @param args  additional arguments to the creation
+     * @return the future completion according to the command exit code
+     */
+    override def create(image: String, args: Seq[String])(implicit transid: TransactionId): Future[ContainerId] = ???
+
+    /**
+     * Starts a created container
+     *
+     * @param id   the container id to run
+     * @param args additional arguments to the start of the container
+     * @return the future completion according to the command exit code
+     */
+    override def start(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit] = ???
   }
 }
