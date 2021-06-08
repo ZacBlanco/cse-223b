@@ -103,6 +103,21 @@ object WhiskEntityStore {
         materializer)
 }
 
+
+//object WhiskCheckpointStore {
+//
+//  def datastore()(implicit system: ActorSystem, logging: Logging, materializer: ActorMaterializer) =
+//    SpiLoader
+//      .get[ArtifactStoreProvider]
+//      .makeStore[WhiskCheckpoint]()(
+//        classTag[WhiskCheckpoint],
+//        WhiskCheckpointJsonFormat,
+//        WhiskDocumentReader,
+//        system,
+//        logging,
+//        materializer)
+//}
+
 object WhiskActivationStore {
   implicit val docReader = WhiskDocumentReader
 

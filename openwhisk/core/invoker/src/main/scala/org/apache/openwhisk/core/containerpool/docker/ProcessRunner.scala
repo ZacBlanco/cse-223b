@@ -67,6 +67,33 @@ trait ProcessRunner {
     }
 }
 
+object PRunner {
+  def executeProcess(args: Seq[String], timeout: Duration)(implicit ec: ExecutionContext, as: ActorSystem) =
+    Future(blocking {
+      val out = new mutable.ListBuffer[String]
+      val err = new mutable.ListBuffer[String]
+      val process = args.run(ProcessLogger(o => out += o, e => err += e))
+
+      val scheduled = timeout match {
+        case t: FiniteDuration => Some(as.scheduler.scheduleOnce(t)(process.destroy()))
+        case _                 => None
+      }
+
+      (ExitStatus(process.exitValue()), out.mkString("\n"), err.mkString("\n"), scheduled)
+    }).flatMap {
+      case (ExitStatus(0), stdout, _, scheduled) =>
+        scheduled.foreach(_.cancel())
+        Future.successful(stdout)
+      case (exitStatus, stdout, stderr, scheduled) =>
+        scheduled.foreach(_.cancel())
+        timeout match {
+          case _: FiniteDuration if exitStatus.terminatedBySIGTERM =>
+            Future.failed(ProcessTimeoutException(timeout, exitStatus, stdout, stderr))
+          case _ => Future.failed(ProcessUnsuccessfulException(exitStatus, stdout, stderr))
+        }
+    }
+}
+
 object ExitStatus {
   // Based on The Open Group Base Specifications Issue 7, 2018 edition:
   // Shell & Utilities - Shell Command Language - 2.8.2 Exit Status for Commands

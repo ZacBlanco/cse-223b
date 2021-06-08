@@ -20,8 +20,8 @@ package org.apache.openwhisk.core.containerpool
 import akka.actor.Actor
 import akka.actor.ActorRef
 import akka.actor.Cancellable
-import java.time.Instant
 
+import java.time.Instant
 import akka.actor.Status.{Failure => FailureMessage}
 import akka.actor.{FSM, Props, Stash}
 import akka.event.Logging.InfoLevel
@@ -35,9 +35,9 @@ import akka.pattern.pipe
 import pureconfig.loadConfigOrThrow
 import pureconfig.generic.auto._
 import akka.stream.ActorMaterializer
+
 import java.net.InetSocketAddress
 import java.net.SocketException
-
 import org.apache.openwhisk.common.MetricEmitter
 import org.apache.openwhisk.common.TransactionId.systemPrefix
 
@@ -47,12 +47,8 @@ import spray.json._
 import org.apache.openwhisk.common.{AkkaLogging, Counter, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.ack.ActiveAck
-import org.apache.openwhisk.core.connector.{
-  ActivationMessage,
-  CombinedCompletionAndResultMessage,
-  CompletionMessage,
-  ResultMessage
-}
+import org.apache.openwhisk.core.connector.{ActivationMessage, CombinedCompletionAndResultMessage, CompletionMessage, ResultMessage}
+import org.apache.openwhisk.core.containerpool.ContainerProxy.containerCheckpointName
 import org.apache.openwhisk.core.containerpool.logging.LogCollectingException
 import org.apache.openwhisk.core.database.UserContext
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
@@ -64,8 +60,6 @@ import org.apache.openwhisk.http.Messages
 import scala.concurrent.Future
 import scala.concurrent.duration._
 import scala.util.{Failure, Success}
-import scala.util.Try
-import java.nio.file.Files
 import org.apache.openwhisk.core.database.ArtifactStore
 
 // States
@@ -305,47 +299,39 @@ class ContainerProxy(factory: (TransactionId,
 
     // cold start (no container to reuse or available stem cell container)
     case Event(job: Run, _) =>
-      implicit val transid = job.msg.transid
+      implicit val transid: TransactionId = job.msg.transid
       activeCount += 1
       // create a new container
-
-      if (job.action.stateful) {
-        val checkpoint: Option[WhiskCheckpoint] = ???
-        // checkpoint = WhiskCheckpoint.get(db, doc)
-        val name = ???
-        val namespace = ???
-        // Create another new tmp directory somewhere on the machine
-        Try(Files.createTempDirectory(s"invokerCheckpoint-$name-$namespace")) match {
-          case Success(value) =>
-            // TODO: Decode the base 64 and unzip the files from the WhiskCheckpoint to the tmp dir
-            
-            val container = factory(
-              job.msg.transid,
-              ContainerProxy.containerName(instance, job.msg.user.namespace.name.asString, job.action.name.asString),
-              job.action.exec.image,
-              job.action.exec.pull,
-              job.action.limits.memory.megabytes.MB,
-              poolConfig.cpuShare(job.action.limits.memory.megabytes.MB),
-              Some(job.action),
-              checkpoint)
-          case Failure(exception) =>
-            logging.error(this, s"failed to create restore tmp dir: ${exception}")
-            Future.failed(exception)
-        }
-        // Decode the base 64 and unzip the files from the WhiskCheckpoint to the tmp dir
-        // Call docker create ....
-        // Call docker start --checkpoint <tmp dir> ...
+      val container = if (job.action.stateful.getOrElse(false)) {
+        WhiskCheckpoint.get(db, WhiskCheckpoint.checkpointDocId(job.action)).flatMap(ckpt => {
+          Future.successful(Some(ckpt))
+        }).recoverWith({
+          case e: Exception =>
+            logging.error(this, s"failed to restore action: $e")
+            Future.successful(None)
+        }).flatMap(ckpt => {
+          factory(
+            job.msg.transid,
+            ContainerProxy.containerName(instance, job.msg.user.namespace.name.asString, job.action.name.asString),
+            job.action.exec.image,
+            job.action.exec.pull,
+            job.action.limits.memory.megabytes.MB,
+            poolConfig.cpuShare(job.action.limits.memory.megabytes.MB),
+            Some(job.action),
+            ckpt)
+        })
+      } else {
+        factory(
+          job.msg.transid,
+          ContainerProxy.containerName(instance, job.msg.user.namespace.name.asString, job.action.name.asString),
+          job.action.exec.image,
+          job.action.exec.pull,
+          job.action.limits.memory.megabytes.MB,
+          poolConfig.cpuShare(job.action.limits.memory.megabytes.MB),
+          Some(job.action),
+          None)
       }
 
-      val container = factory(
-        job.msg.transid,
-        ContainerProxy.containerName(instance, job.msg.user.namespace.name.asString, job.action.name.asString),
-        job.action.exec.image,
-        job.action.exec.pull,
-        job.action.limits.memory.megabytes.MB,
-        poolConfig.cpuShare(job.action.limits.memory.megabytes.MB),
-        Some(job.action),
-        None)
 
       // container factory will either yield a new container ready to execute the action, or
       // starting up the container failed; for the latter, it's either an internal error starting
@@ -492,7 +478,7 @@ class ContainerProxy(factory: (TransactionId,
         .getOrElse(data)
       rescheduleJob = true
       rejectBuffered()
-      destroyContainer(newData, true)
+      destroyContainer(newData, true, action = Some(data.action))
 
     // Failed after /init (the first run failed) on prewarmed or cold start
     // - container will be destroyed
@@ -519,7 +505,7 @@ class ContainerProxy(factory: (TransactionId,
         s"Failed during use of warm container ${data.getContainer}, queued activations will be resent.")
       activeCount -= 1
       if (activeCount == 0) {
-        destroyContainer(data, true)
+        destroyContainer(data, true, action = Some(data.action))
       } else {
         //signal that this container is going away (but don't remove it yet...)
         rescheduleJob = true
@@ -556,16 +542,16 @@ class ContainerProxy(factory: (TransactionId,
       data.container.suspend()(TransactionId.invokerNanny).map(_ => ContainerPaused).pipeTo(self)
       goto(Pausing)
 
-    case Event(Remove, data: WarmedData) => destroyContainer(data, true)
+    case Event(Remove, data: WarmedData) => destroyContainer(data, true, action = Some(data.action))
 
     // warm container failed
     case Event(_: FailureMessage, data: WarmedData) =>
-      destroyContainer(data, true)
+      destroyContainer(data, true, action = Some(data.action))
   }
 
   when(Pausing) {
     case Event(ContainerPaused, data: WarmedData)   => goto(Paused)
-    case Event(_: FailureMessage, data: WarmedData) => destroyContainer(data, true)
+    case Event(_: FailureMessage, data: WarmedData) => destroyContainer(data, true, action = Some(data.action))
     case _                                          => delay
   }
 
@@ -592,7 +578,7 @@ class ContainerProxy(factory: (TransactionId,
     // container is reclaimed by the pool or it has become too old
     case Event(StateTimeout | Remove, data: WarmedData) =>
       rescheduleJob = true // to suppress sending message to the pool and not double count
-      destroyContainer(data, true)
+      destroyContainer(data, true, action = Some(data.action))
   }
 
   when(Removing) {
@@ -606,7 +592,7 @@ class ContainerProxy(factory: (TransactionId,
       val newData = data.withoutResumeRun()
       //if there are items in runbuffer, process them if there is capacity, and stay; otherwise if we have any pending activations, also stay
       if (activeCount == 0) {
-        destroyContainer(newData, true)
+        destroyContainer(newData, true, action = Some(data.action))
       } else {
         stay using newData
       }
@@ -617,7 +603,7 @@ class ContainerProxy(factory: (TransactionId,
       activeCount -= 1
       val newData = data.withoutResumeRun()
       if (activeCount == 0) {
-        destroyContainer(newData, true)
+        destroyContainer(newData, true, action = Some(data.action))
       } else {
         stay using newData
       }
@@ -724,26 +710,30 @@ class ContainerProxy(factory: (TransactionId,
     }
 
     unpause
-      .flatMap({ _ =>
+      .flatMap({ x =>
         action.flatMap({ f =>
-          if (f.stateful) {
+          if (f.stateful.getOrElse(false)) {
             val docInfo = for {
-              ckpt <- container.checkpoint("TODOCheckpointName", f.toWhiskAction)(TransactionId.invokerNanny)
+              ckpt <- container.checkpoint(containerCheckpointName, f.toWhiskAction)(TransactionId.invokerNanny)
               x <- WhiskCheckpoint.put(db, ckpt, None)(TransactionId.invokerNanny, None)
             } yield x
             logging.debug(this, s"successfully stored checkpoint: $docInfo")
+            docInfo.onComplete({
+              case Success(value) => logging.info(this, s"successfully stored checkpoint: $value")
+              case Failure(exception) => logging.error(this, s"failed to store checkpoint: $exception")
+            })
             Some(docInfo)
           } else {
             None
           }
         }) match {
           case Some(value) => value
-          case None => Future.failed(new Exception("didn't store ckpt?"))
+          case None => Future.successful(())
         }
       })
-      .flatMap(_ => container.destroy()(TransactionId.invokerNanny))
-      .flatMap(_ => abortProcess)
-      .map(_ => ContainerRemoved(replacePrewarm))
+      .flatMap(x => container.destroy()(TransactionId.invokerNanny))
+      .flatMap(x => abortProcess)
+      .map(x => ContainerRemoved(replacePrewarm))
       .pipeTo(self)
     if (stateName != Removing) {
       goto(Removing) using newData
@@ -1063,6 +1053,8 @@ object ContainerProxy {
 
   // Needs to be thread-safe as it's used by multiple proxies concurrently.
   private val containerCount = new Counter
+
+  val containerCheckpointName = "TODOCheckpointName"
 
   val timeouts = loadConfigOrThrow[ContainerProxyTimeoutConfig](ConfigKeys.containerProxyTimeouts)
   val activationErrorLogging =

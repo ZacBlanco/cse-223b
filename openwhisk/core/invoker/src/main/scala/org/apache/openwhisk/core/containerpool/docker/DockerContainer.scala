@@ -41,6 +41,8 @@ import org.apache.openwhisk.core.containerpool.logging.LogLine
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.http.Messages
 
+import java.nio.file.Paths
+
 object DockerContainer {
 
   private val byteStringSentinel = ByteString(Container.ACTIVATION_LOG_SENTINEL)
@@ -128,10 +130,29 @@ object DockerContainer {
 
     val containerId = fromCheckpoint match {
       case Some(checkpoint) =>
+        // Learned that the "--checkpoint-dir" in docker is not actually supported
+        // as a hacky workaround, write the checkpoint, then copy the checkpoint to
+        // /var/lib/docker/containers/<container id>/checkpoints/<checkpointName>
         for {
           cpt <- checkpoint.writeCheckpoint()
           container <- docker.create(imageToUse, args)
-          aaa <- docker.start(container, Seq("--checkpoint", checkpoint.checkpointName, "--checkpoint-dir", cpt.toAbsolutePath().toString()))
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to create container: $t")
+                Future.failed(t)
+            })
+          copied <- PRunner.executeProcess(Seq("sudo", "cp", "-r", Paths.get(cpt.toString, checkpoint.checkpointName).toString, s"/var/lib/docker/containers/${container.asString}/checkpoints/${checkpoint.checkpointName}"), 10.seconds)
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to copy checkpoint: $t")
+                Future.failed(t)
+            })
+          _ <- docker.start(container, Seq("--checkpoint", checkpoint.checkpointName, container.asString))
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to start container: $t")
+                Future.failed(t)
+            })
         } yield container
       case None =>
         docker.run(imageToUse, args).recoverWith {

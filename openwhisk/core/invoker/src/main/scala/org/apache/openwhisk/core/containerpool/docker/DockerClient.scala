@@ -183,10 +183,10 @@ class DockerClient(dockerHost: Option[String] = None,
   }
 
   def checkpoint(id: ContainerId, checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
-    runCmd(Seq("checkpoint", "create", "--leave-running", "--checkpoint-dir", s"/tmp/${id.asString}", id.asString), config.timeouts.unpause)
+    runCmd(Seq("checkpoint", "create", "--leave-running", "--checkpoint-dir", s"/tmp/${id.asString}", id.asString, checkpointName), config.timeouts.unpause)
       .flatMap { x =>
         val x = for {
-          dir <- Try(Files.createTempDirectory(s"checkpoint-${id}"))
+          dir <- Try(Files.createTempDirectory(s"checkpoint-${id.asString}"))
           ckpt <- Try(WhiskCheckpoint.createCheckpoint(action.fullyQualifiedName(false), checkpointName, dir))
         } yield ckpt
         Future.fromTry(x)
@@ -202,7 +202,7 @@ class DockerClient(dockerHost: Option[String] = None,
       }
     }.flatMap { _ =>
       // Iff the semaphore was acquired successfully
-      runCmd(Seq("start") ++ args ++ Seq(image), config.timeouts.run)
+      runCmd(Seq("create") ++ args ++ Seq(image), config.timeouts.run)
         .andThen {
           // Release the semaphore as quick as possible regardless of the runCmd() result
           case _ => runSemaphore.release()

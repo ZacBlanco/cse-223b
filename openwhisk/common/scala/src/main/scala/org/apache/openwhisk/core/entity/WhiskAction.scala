@@ -378,7 +378,9 @@ case class ExecutableWhiskActionMetaData(namespace: EntityPath,
  * @param checkpoint a base64 encoded string of a zip file representing the checkpoint
  *
  * */
-case class WhiskCheckpoint(namespace: EntityPath, override val name: EntityName, checkpointName: String, checkpoint: String) extends WhiskEntity(name, "checkpoint") {
+case class WhiskCheckpoint(ns: EntityPath, override val name: EntityName, checkpointName: String, checkpoint: String) extends WhiskEntity(name, "checkpoint") {
+
+  val namespace: EntityPath = WhiskCheckpoint.checkpointNamespace(ns)
 
   override def toJson: JsObject = JsObject(
     "namespace" -> namespace.toJson,
@@ -387,7 +389,7 @@ case class WhiskCheckpoint(namespace: EntityPath, override val name: EntityName,
     "checkpoint" -> checkpoint.toJson,
   )
 
-  override val version: SemVer = ???
+  override val version: SemVer = SemVer(0, 0, 1)
 
   override val publish: Boolean = true
 
@@ -400,7 +402,7 @@ case class WhiskCheckpoint(namespace: EntityPath, override val name: EntityName,
     * @return the path on disk to the checkpoint
     */
   def writeCheckpoint()(implicit logger: Logging): Future[Path] = {
-    Try(Files.createTempDirectory(s"invokerCheckpoint-$name-$namespace")) match {
+    Try(Files.createTempDirectory(s"invokerCheckpoint-$name-${namespace.asString.replace("/", "-")}")) match {
       case Success(value) =>
           val fis = Base64.getDecoder.wrap(new ByteArrayInputStream(checkpoint.getBytes()))
           val zis = new ZipInputStream(fis)
@@ -415,7 +417,6 @@ case class WhiskCheckpoint(namespace: EntityPath, override val name: EntityName,
         Future.failed(exception)
     }
   }
-
 }
 
 
@@ -441,8 +442,8 @@ object WhiskCheckpoint extends DocumentFactory[WhiskCheckpoint] with DefaultJson
       */
   def createCheckpoint(name: FullyQualifiedEntityName, checkpointName: String, localDir: Path)(implicit transid: TransactionId): WhiskCheckpoint = {
     val ckptDir = Files.list(localDir)
+
     var buffer = new Array[Byte](8192)
-    val ckptPath = Files.createTempFile(s"dockerCkPt-${name.name}", null)
     val bos = new ByteArrayOutputStream(1024 * 1024 * 5) // 5MB initially
     val zipStream = new ZipOutputStream(bos)
     ckptDir.forEach(p => {
@@ -459,6 +460,11 @@ object WhiskCheckpoint extends DocumentFactory[WhiskCheckpoint] with DefaultJson
     zipStream.close()
     WhiskCheckpoint(name.path, name.name, checkpointName, new String(Base64.getEncoder().encode(bos.toByteArray())))
   }
+
+  def checkpointNamespace(ns: EntityPath): EntityPath = EntityPath(s"checkpoint${EntityPath.PATHSEP}${ns}")
+
+  def checkpointDocId(action: ExecutableWhiskAction): DocId = DocId(FullyQualifiedEntityName(checkpointNamespace(action.namespace), action.name).asString)
+
 }
 
 object WhiskAction extends DocumentFactory[WhiskAction] with WhiskEntityQueries[WhiskAction] with DefaultJsonProtocol {
@@ -470,7 +476,7 @@ object WhiskAction extends DocumentFactory[WhiskAction] with WhiskEntityQueries[
   override val collectionName = "actions"
   override val cacheEnabled = true
 
-  override implicit val serdes = jsonFormat(
+  override implicit val serdes: RootJsonFormat[WhiskAction] = jsonFormat(
     WhiskAction.apply,
     "namespace",
     "name",
@@ -549,7 +555,7 @@ object WhiskAction extends DocumentFactory[WhiskAction] with WhiskEntityQueries[
     val inlineActionCode: WhiskAction => Future[WhiskAction] = { action =>
       def getWithAttachment(attached: Attached, binary: Boolean, exec: AttachedCode) = {
         val boas = new ByteArrayOutputStream()
-        val wrapped = if (binary) Base64.getEncoder().wrap(boas) else boas
+        val wrapped = if (binary) Base64.getEncoder.wrap(boas) else boas
 
         getAttachment[A](db, action, attached, wrapped, Some { a: WhiskAction =>
           wrapped.close()
@@ -689,7 +695,7 @@ object WhiskActionMetaData
   override val collectionName = "actions"
   override val cacheEnabled = true
 
-  override implicit val serdes = jsonFormat(
+  override implicit val serdes: RootJsonFormat[WhiskActionMetaData] = jsonFormat(
     WhiskActionMetaData.apply,
     "namespace",
     "name",
@@ -764,9 +770,9 @@ object WhiskActionMetaData
 }
 
 object ActionLimitsOption extends DefaultJsonProtocol {
-  implicit val serdes = jsonFormat4(ActionLimitsOption.apply)
+  implicit val serdes: RootJsonFormat[ActionLimitsOption] = jsonFormat4(ActionLimitsOption.apply)
 }
 
 object WhiskActionPut extends DefaultJsonProtocol {
-  implicit val serdes = jsonFormat8(WhiskActionPut.apply)
+  implicit val serdes: RootJsonFormat[WhiskActionPut] = jsonFormat8(WhiskActionPut.apply)
 }

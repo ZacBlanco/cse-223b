@@ -462,6 +462,12 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
       case _ => content.parameters getOrElse Parameters()
     }
 
+    val stateful = if (exec.kind.toLowerCase.contains("actor")) {
+      Some(true)
+    } else {
+      content.stateful
+    }
+
     WhiskAction(
       entityName.path,
       entityName.name,
@@ -470,7 +476,8 @@ trait WhiskActionsApi extends WhiskCollectionAPI with PostActionActivation with 
       limits,
       content.version getOrElse SemVer(),
       content.publish getOrElse false,
-      WhiskActionsApi.amendAnnotations(content.annotations getOrElse Parameters(), exec))
+      WhiskActionsApi.amendAnnotations(content.annotations getOrElse Parameters(), exec),
+      stateful = stateful)
   }
 
   /** For a sequence action, gather referenced entities and authorize access. */
