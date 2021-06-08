@@ -39,7 +39,7 @@ import org.apache.openwhisk.core.containerpool.ContainerId
 import org.apache.openwhisk.core.containerpool.ContainerAddress
 import org.apache.openwhisk.core.entity.{WhiskAction, WhiskCheckpoint}
 
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{Duration, FiniteDuration, SECONDS}
 
 object DockerContainerId {
 
@@ -183,13 +183,13 @@ class DockerClient(dockerHost: Option[String] = None,
   }
 
   def checkpoint(id: ContainerId, checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
-    runCmd(Seq("checkpoint", "create", "--leave-running", "--checkpoint-dir", s"/tmp/${id.asString}", id.asString, checkpointName), config.timeouts.unpause)
+    val ckPtDir: String = s"/tmp/checkpoints/${id.asString}"
+    runCmd(Seq("checkpoint", "create", "--leave-running", "--checkpoint-dir", ckPtDir, id.asString, checkpointName), config.timeouts.unpause)
       .flatMap { x =>
-        val x = for {
-          dir <- Try(Files.createTempDirectory(s"checkpoint-${id.asString}"))
-          ckpt <- Try(WhiskCheckpoint.createCheckpoint(action.fullyQualifiedName(false), checkpointName, dir))
+        for {
+          _ <- PRunner.executeProcess(Seq("sudo", "chmod", "-R", "777", ckPtDir), FiniteDuration(10, SECONDS))
+          ckpt <- Future.fromTry(Try(WhiskCheckpoint.createCheckpoint(action.fullyQualifiedName(false), checkpointName, Paths.get(ckPtDir))))
         } yield ckpt
-        Future.fromTry(x)
       }
   }
 

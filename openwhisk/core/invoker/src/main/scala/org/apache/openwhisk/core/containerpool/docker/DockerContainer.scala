@@ -41,8 +41,6 @@ import org.apache.openwhisk.core.containerpool.logging.LogLine
 import org.apache.openwhisk.core.entity.ExecManifest.ImageName
 import org.apache.openwhisk.http.Messages
 
-import java.nio.file.Paths
-
 object DockerContainer {
 
   private val byteStringSentinel = ByteString(Container.ACTIVATION_LOG_SENTINEL)
@@ -141,7 +139,13 @@ object DockerContainer {
                 log.error(this, s"failed to create container: $t")
                 Future.failed(t)
             })
-          copied <- PRunner.executeProcess(Seq("sudo", "cp", "-r", Paths.get(cpt.toString, checkpoint.checkpointName).toString, s"/var/lib/docker/containers/${container.asString}/checkpoints/${checkpoint.checkpointName}"), 10.seconds)
+          mkdir <- PRunner.executeProcess(Seq("sudo", "mkdir", "-p", s"/var/lib/docker/containers/${container.asString}/checkpoints/${checkpoint.checkpointName}"), 10.seconds)
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to make checkpoint dir: $t")
+                Future.failed(t)
+            })
+          copied <- PRunner.executeProcess(Seq("sudo", "cp", "-r", cpt.toString, s"/var/lib/docker/containers/${container.asString}/checkpoints/"), 10.seconds)
             .recoverWith({
               case t: Throwable =>
                 log.error(this, s"failed to copy checkpoint: $t")

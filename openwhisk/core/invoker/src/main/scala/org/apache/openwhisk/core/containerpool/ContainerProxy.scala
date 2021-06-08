@@ -713,9 +713,16 @@ class ContainerProxy(factory: (TransactionId,
       .flatMap({ x =>
         action.flatMap({ f =>
           if (f.stateful.getOrElse(false)) {
+            implicit val transid: TransactionId = TransactionId.invokerNanny
             val docInfo = for {
-              ckpt <- container.checkpoint(containerCheckpointName, f.toWhiskAction)(TransactionId.invokerNanny)
-              x <- WhiskCheckpoint.put(db, ckpt, None)(TransactionId.invokerNanny, None)
+              ckpt <- container.checkpoint(containerCheckpointName, f.toWhiskAction)
+              oldCkpt <- WhiskCheckpoint.get(db, WhiskCheckpoint.checkpointDocId(f))
+                .map(x => Some(x))
+                .recoverWith({
+                  case t: Throwable => Future.successful(None)
+                })
+              copiedCkpt <- Future.successful(if (oldCkpt.isDefined) ckpt.revision(oldCkpt.get.rev) else ckpt)
+              x <- WhiskCheckpoint.put(db, copiedCkpt, oldCkpt)(TransactionId.invokerNanny, None)
             } yield x
             logging.debug(this, s"successfully stored checkpoint: $docInfo")
             docInfo.onComplete({

@@ -113,7 +113,7 @@ trait Container {
     Future.failed(new Exception("checkpoint not implemented???"))
   }
 
-  def checkpointDir: String = s"/tmp/${id}"
+  def checkpointDir: String = s"/tmp/checkpoints/${id}"
 
   /** Initializes code in the container. */
   def initialize(initializer: JsObject,
