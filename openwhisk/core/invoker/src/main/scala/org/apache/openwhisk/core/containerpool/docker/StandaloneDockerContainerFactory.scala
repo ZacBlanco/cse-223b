@@ -22,7 +22,7 @@ import org.apache.commons.lang3.SystemUtils
 import org.apache.openwhisk.common.{Logging, TransactionId}
 import org.apache.openwhisk.core.{ConfigKeys, WhiskConfig}
 import org.apache.openwhisk.core.containerpool.{Container, ContainerFactory, ContainerFactoryProvider}
-import org.apache.openwhisk.core.entity.{ByteSize, ExecManifest, InvokerInstanceId}
+import org.apache.openwhisk.core.entity.{ByteSize, ExecManifest, InvokerInstanceId, WhiskCheckpoint}
 import pureconfig._
 import pureconfig.generic.auto._
 
@@ -66,7 +66,8 @@ class StandaloneDockerContainerFactory(instance: InvokerInstanceId, parameters: 
                                actionImage: ExecManifest.ImageName,
                                userProvidedImage: Boolean,
                                memory: ByteSize,
-                               cpuShares: Int)(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
+                               cpuShares: Int,
+                               fromCheckpoint: Option[WhiskCheckpoint])(implicit config: WhiskConfig, logging: Logging): Future[Container] = {
 
     //For standalone server usage we would also want to pull the OpenWhisk provided image so as to ensure if
     //local setup does not have the image then it pulls it down
@@ -83,8 +84,7 @@ class StandaloneDockerContainerFactory(instance: InvokerInstanceId, parameters: 
           true
         }
       } else Future.successful(true)
-
-    pulled.flatMap(_ => super.createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares))
+    pulled.flatMap(_ => super.createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares, fromCheckpoint))
   }
 
   override def init(): Unit = {
@@ -93,6 +93,11 @@ class StandaloneDockerContainerFactory(instance: InvokerInstanceId, parameters: 
       s"Standalone docker container factory config pullStandardImages: ${factoryConfig.pullStandardImages}")
     super.init()
   }
+
+  override def createContainer(tid: TransactionId, name: String, actionImage: ExecManifest.ImageName,
+                               userProvidedImage: Boolean, memory: ByteSize, cpuShares: Int)
+                              (implicit config: WhiskConfig, logging: Logging): Future[Container] =
+    createContainer(tid, name, actionImage, userProvidedImage, memory, cpuShares, None)
 }
 
 trait WindowsDockerClient {

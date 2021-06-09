@@ -54,7 +54,7 @@ abstract class WhiskEntity protected[entity] (en: EntityName, val entityType: St
    * The name of the entity qualified with its namespace and version for
    * creating unique keys in backend services.
    */
-  final def fullyQualifiedName(withVersion: Boolean) =
+  def fullyQualifiedName(withVersion: Boolean) =
     FullyQualifiedEntityName(namespace, en, if (withVersion) Some(version) else None)
 
   /** The primary key for the entity in the datastore */
@@ -127,6 +127,7 @@ object WhiskDocumentReader extends DocumentReader {
     val doc = ma.runtimeClass match {
       case x if x == classOf[WhiskAction]         => WhiskAction.serdes.read(value)
       case x if x == classOf[WhiskActionMetaData] => WhiskActionMetaData.serdes.read(value)
+      case x if x == classOf[WhiskCheckpoint]     => WhiskCheckpoint.serdes.read(value)
       case x if x == classOf[WhiskPackage]        => WhiskPackage.serdes.read(value)
       case x if x == classOf[WhiskActivation]     => WhiskActivation.serdes.read(value)
       case x if x == classOf[WhiskTrigger]        => WhiskTrigger.serdes.read(value)
@@ -153,6 +154,7 @@ object WhiskEntityJsonFormat extends RootJsonFormat[WhiskEntity] {
     Stream(
       WhiskAction.serdes.read,
       WhiskActivation.serdes.read,
+      WhiskCheckpoint.serdes.read,
       WhiskRule.serdes.read,
       WhiskTrigger.serdes.read,
       WhiskPackage.serdes.read)
@@ -172,6 +174,7 @@ object WhiskEntityJsonFormat extends RootJsonFormat[WhiskEntity] {
     case p: WhiskPackage    => WhiskPackage.serdes.write(p)
     case r: WhiskRule       => WhiskRule.serdes.write(r)
     case t: WhiskTrigger    => WhiskTrigger.serdes.write(t)
+    case c: WhiskCheckpoint => WhiskCheckpoint.serdes.write(c)
   }
 }
 

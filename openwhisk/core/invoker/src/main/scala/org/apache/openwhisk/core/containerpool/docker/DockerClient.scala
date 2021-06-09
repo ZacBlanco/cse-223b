@@ -21,7 +21,6 @@ import java.io.FileNotFoundException
 import java.nio.file.Files
 import java.nio.file.Paths
 import java.util.concurrent.Semaphore
-
 import akka.actor.ActorSystem
 
 import scala.collection.concurrent.TrieMap
@@ -38,8 +37,9 @@ import org.apache.openwhisk.common.{Logging, LoggingMarkers, MetricEmitter, Tran
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.containerpool.ContainerId
 import org.apache.openwhisk.core.containerpool.ContainerAddress
+import org.apache.openwhisk.core.entity.{WhiskAction, WhiskCheckpoint}
 
-import scala.concurrent.duration.Duration
+import scala.concurrent.duration.{Duration, FiniteDuration, SECONDS}
 
 object DockerContainerId {
 
@@ -182,6 +182,52 @@ class DockerClient(dockerHost: Option[String] = None,
     runCmd(cmd, config.timeouts.ps).map(_.linesIterator.toSeq.map(ContainerId.apply))
   }
 
+  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
+    val ckPtDir: String = s"/tmp/checkpoints/${id.asString}"
+    runCmd(Seq("checkpoint", "create", "--leave-running", "--checkpoint-dir", ckPtDir, id.asString, checkpointName), config.timeouts.unpause)
+      .flatMap { x =>
+        for {
+          _ <- PRunner.executeProcess(Seq("sudo", "chmod", "-R", "777", ckPtDir), FiniteDuration(10, SECONDS))
+          ckpt <- Future.fromTry(Try(WhiskCheckpoint.createCheckpoint(action.fullyQualifiedName(false), checkpointName, Paths.get(ckPtDir))))
+        } yield ckpt
+      }
+  }
+
+  def create(image: String, args: Seq[String])(implicit transid: TransactionId): Future[ContainerId] = {
+    Future {
+      blocking {
+        // Acquires a permit from this semaphore, blocking until one is available, or the thread is interrupted.
+        // Throws InterruptedException if the current thread is interrupted
+        runSemaphore.acquire()
+      }
+    }.flatMap { _ =>
+      // Iff the semaphore was acquired successfully
+      runCmd(Seq("create") ++ args ++ Seq(image), config.timeouts.run)
+        .andThen {
+          // Release the semaphore as quick as possible regardless of the runCmd() result
+          case _ => runSemaphore.release()
+        }
+        .map(ContainerId.apply)
+        .recoverWith {
+          // https://docs.docker.com/v1.12/engine/reference/run/#/exit-status
+          // Exit status 125 means an error reported by the Docker daemon.
+          // Examples:
+          // - Unrecognized option specified
+          // - Not enough disk space
+          case pre: ProcessUnsuccessfulException if pre.exitStatus == ExitStatus(125) =>
+            Future.failed(
+              DockerContainerId
+                .parse(pre.stdout)
+                .map(BrokenDockerContainer(_, s"Broken container: ${pre.getMessage}"))
+                .getOrElse(pre))
+        }
+    }
+  }
+
+  def start(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit] = {
+    runCmd(Seq("start") ++ args, config.timeouts.run).map(_ => ())
+  }
+
   /**
    * Stores pulls that are currently being executed and collapses multiple
    * pulls into just one. After a pull is finished, the cached future is removed
@@ -294,6 +340,32 @@ trait DockerApi {
    * @return a Future containing whether the container was killed or not
    */
   def isOomKilled(id: ContainerId)(implicit transid: TransactionId): Future[Boolean]
+
+  /**
+   * Checkpoints the container with the given id.
+   *
+   * @param id the id of the container to remove
+   * @return a Future completing according to the command's exit-code
+   */
+  def checkpoint(id: ContainerId, checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint]
+
+  /**
+    * Creates, but does not start a new container
+    *
+    * @param image the container image to run
+    * @param args additional arguments to the creation
+    * @return the future completion according to the command exit code
+    */
+  def create(image: String, args: Seq[String])(implicit transid: TransactionId): Future[ContainerId]
+
+  /**
+    * Starts a created container
+    *
+    * @param id the container id to run
+    * @param args additional arguments to the start of the container
+    * @return the future completion according to the command exit code
+    */
+  def start(id: ContainerId, args: Seq[String])(implicit transid: TransactionId): Future[Unit]
 }
 
 /** Indicates any error while starting a container that leaves a broken container behind that needs to be removed */

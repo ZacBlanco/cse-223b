@@ -24,13 +24,14 @@ import akka.actor.ActorSystem
 import akka.stream._
 import akka.stream.scaladsl.Framing.FramingException
 import spray.json._
+
 import scala.concurrent.{ExecutionContext, Future}
 import scala.concurrent.duration._
 import org.apache.openwhisk.common.Logging
 import org.apache.openwhisk.common.TransactionId
 import org.apache.openwhisk.core.containerpool._
 import org.apache.openwhisk.core.entity.ActivationResponse.{ConnectionError, MemoryExhausted}
-import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ByteSize}
+import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ByteSize, WhiskAction, WhiskCheckpoint}
 import org.apache.openwhisk.core.entity.size._
 import akka.stream.scaladsl.{Framing, Source}
 import akka.stream.stage._
@@ -70,7 +71,8 @@ object DockerContainer {
              dnsOptions: Seq[String] = Seq.empty,
              name: Option[String] = None,
              useRunc: Boolean = true,
-             dockerRunParameters: Map[String, Set[String]])(implicit docker: DockerApiWithFileAccess,
+             dockerRunParameters: Map[String, Set[String]],
+             fromCheckpoint: Option[WhiskCheckpoint] = None)(implicit docker: DockerApiWithFileAccess,
                                                             runc: RuncApi,
                                                             as: ActorSystem,
                                                             ec: ExecutionContext,
@@ -124,24 +126,56 @@ object DockerContainer {
         Future.successful(true)
     }
 
+    val containerId = fromCheckpoint match {
+      case Some(checkpoint) =>
+        // Learned that the "--checkpoint-dir" in docker is not actually supported
+        // as a hacky workaround, write the checkpoint, then copy the checkpoint to
+        // /var/lib/docker/containers/<container id>/checkpoints/<checkpointName>
+        for {
+          cpt <- checkpoint.writeCheckpoint()
+          container <- docker.create(imageToUse, args)
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to create container: $t")
+                Future.failed(t)
+            })
+          mkdir <- PRunner.executeProcess(Seq("sudo", "mkdir", "-p", s"/var/lib/docker/containers/${container.asString}/checkpoints/${checkpoint.checkpointName}"), 10.seconds)
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to make checkpoint dir: $t")
+                Future.failed(t)
+            })
+          copied <- PRunner.executeProcess(Seq("sudo", "cp", "-r", cpt.toString, s"/var/lib/docker/containers/${container.asString}/checkpoints/"), 10.seconds)
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to copy checkpoint: $t")
+                Future.failed(t)
+            })
+          _ <- docker.start(container, Seq("--checkpoint", checkpoint.checkpointName, container.asString))
+            .recoverWith({
+              case t: Throwable =>
+                log.error(this, s"failed to start container: $t")
+                Future.failed(t)
+            })
+        } yield container
+      case None =>
+        docker.run(imageToUse, args).recoverWith {
+          case BrokenDockerContainer(brokenId, _) =>
+            // Remove the broken container - but don't wait or check for the result.
+            // If the removal fails, there is nothing we could do to recover from the recovery.
+            docker.rm(brokenId)
+            Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
+          case _ =>
+            // Iff the pull was successful, we assume that the error is not due to an image pull error, otherwise
+            // the docker run was a backup measure to try and start the container anyway. If it fails again, we assume
+            // the image could still not be pulled and wasn't available locally.
+            Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
+        }
+    }
+
     for {
       pullSuccessful <- pulled
-      id <- docker.run(imageToUse, args).recoverWith {
-        case BrokenDockerContainer(brokenId, _) =>
-          // Remove the broken container - but don't wait or check for the result.
-          // If the removal fails, there is nothing we could do to recover from the recovery.
-          docker.rm(brokenId)
-          Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
-        case _ =>
-          // Iff the pull was successful, we assume that the error is not due to an image pull error, otherwise
-          // the docker run was a backup measure to try and start the container anyway. If it fails again, we assume
-          // the image could still not be pulled and wasn't available locally.
-          if (pullSuccessful) {
-            Future.failed(WhiskContainerStartupError(Messages.resourceProvisionError))
-          } else {
-            Future.failed(BlackboxStartupError(Messages.imagePullError(imageToUse)))
-          }
-      }
+      id <- containerId
       ip <- docker.inspectIPAddress(id, network).recoverWith {
         // remove the container immediately if inspect failed as
         // we cannot recover that case automatically
@@ -190,7 +224,9 @@ class DockerContainer(protected val id: ContainerId,
     super.destroy()
     docker.rm(id)
   }
-
+  override def checkpoint(checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
+    docker.checkpoint(id, checkpointName, action)
+  }
   /**
    * Was the container killed due to memory exhaustion?
    *

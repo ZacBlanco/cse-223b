@@ -152,7 +152,7 @@ class InvokerReactive(
   private val childFactory = (f: ActorRefFactory) =>
     f.actorOf(
       ContainerProxy
-        .props(containerFactory.createContainer, ack, store, collectLogs, instance, poolConfig))
+        .props(containerFactory.createContainer, ack, store, collectLogs, instance, poolConfig, entityStore))
 
   val prewarmingConfigs: List[PrewarmingConfig] = {
     ExecManifest.runtimesManifest.stemcells.flatMap {

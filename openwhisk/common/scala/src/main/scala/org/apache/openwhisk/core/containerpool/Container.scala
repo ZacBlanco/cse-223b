@@ -18,7 +18,6 @@
 package org.apache.openwhisk.core.containerpool
 
 import java.time.Instant
-
 import akka.actor.ActorSystem
 import akka.event.Logging.InfoLevel
 import akka.stream.scaladsl.Source
@@ -30,7 +29,7 @@ import spray.json.JsObject
 import org.apache.openwhisk.common.{Logging, LoggingMarkers, TransactionId}
 import org.apache.openwhisk.core.ConfigKeys
 import org.apache.openwhisk.core.entity.ActivationResponse.{ContainerConnectionError, ContainerResponse}
-import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ActivationResponse, ByteSize, WhiskAction}
+import org.apache.openwhisk.core.entity.{ActivationEntityLimit, ActivationResponse, ByteSize, WhiskAction, WhiskCheckpoint}
 import org.apache.openwhisk.core.entity.size._
 import org.apache.openwhisk.http.Messages
 
@@ -108,6 +107,13 @@ trait Container {
   def destroy()(implicit transid: TransactionId): Future[Unit] = {
     closeConnections(httpConnection)
   }
+
+  /** Checkpoint a container. Default is to do nothing */
+  def checkpoint(checkpointName: String, action: WhiskAction)(implicit transid: TransactionId): Future[WhiskCheckpoint] = {
+    Future.failed(new Exception("checkpoint not implemented???"))
+  }
+
+  def checkpointDir: String = s"/tmp/checkpoints/${id}"
 
   /** Initializes code in the container. */
   def initialize(initializer: JsObject,
